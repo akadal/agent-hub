@@ -1,0 +1,33 @@
+# Local env and secrets
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+id_rsa*
+id_ed25519*
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~
+
+# Build / runtime artifacts (filled as code lands)
+/bin/
+/dist/
+/build/
+/tmp/
+/data/
+*.db
+*.sqlite
+*.sqlite3
+coverage.out
+coverage.html
+node_modules/
+vendor/
+
+# Logs
+*.log
+logs/
