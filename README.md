@@ -57,12 +57,12 @@ docker compose up --build
 | API | http://localhost:8080 |
 | Demo SSH host | `localhost:2222` (`root` / `targetpass`) |
 
-**Default login** (change for any real deploy):
+**Demo login** (seeded only if missing — set via env for your own instance):
 
-- Username: `akadal`
+- Username: `admin`
 - Password: `123456`
 
-These come from `BOOTSTRAP_ADMIN_USERNAME` / `BOOTSTRAP_ADMIN_PASSWORD`.
+Override with `BOOTSTRAP_ADMIN_USERNAME` / `BOOTSTRAP_ADMIN_PASSWORD` in `.env` before first start.
 
 ### First minutes
 

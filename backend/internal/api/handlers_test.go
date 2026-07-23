@@ -21,7 +21,7 @@ func testServer(t *testing.T) (*api.Server, http.Handler) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := st.EnsureBootstrapAdmin("akadal", "123456"); err != nil {
+	if err := st.EnsureBootstrapAdmin("admin", "123456"); err != nil {
 		t.Fatal(err)
 	}
 	tokens := auth.NewTokenService("test-secret", time.Hour)
@@ -70,7 +70,7 @@ func TestHealth_shippedHandler(t *testing.T) {
 
 func TestLogin_bootstrapAdmin(t *testing.T) {
 	_, mux := testServer(t)
-	tok := loginToken(t, mux, "akadal", "123456")
+	tok := loginToken(t, mux, "admin", "123456")
 	if len(tok) < 20 {
 		t.Fatalf("token too short: %q", tok)
 	}
@@ -78,7 +78,7 @@ func TestLogin_bootstrapAdmin(t *testing.T) {
 
 func TestLogin_badPassword(t *testing.T) {
 	_, mux := testServer(t)
-	body, _ := json.Marshal(map[string]string{"username": "akadal", "password": "wrong"})
+	body, _ := json.Marshal(map[string]string{"username": "admin", "password": "wrong"})
 	req := httptest.NewRequest(http.MethodPost, "/api/auth/login", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
@@ -107,7 +107,7 @@ func TestProtectedRoutes_requireAuth(t *testing.T) {
 	}
 
 	// with token
-	tok := loginToken(t, mux, "akadal", "123456")
+	tok := loginToken(t, mux, "admin", "123456")
 	req3 := httptest.NewRequest(http.MethodGet, "/api/me", nil)
 	req3.Header.Set("Authorization", "Bearer "+tok)
 	rr3 := httptest.NewRecorder()
@@ -117,14 +117,14 @@ func TestProtectedRoutes_requireAuth(t *testing.T) {
 	}
 	var me map[string]string
 	_ = json.Unmarshal(rr3.Body.Bytes(), &me)
-	if me["username"] != "akadal" || me["role"] != "admin" {
+	if me["username"] != "admin" || me["role"] != "admin" {
 		t.Fatalf("me body=%v", me)
 	}
 }
 
 func TestMachineRegisterAndList(t *testing.T) {
 	_, mux := testServer(t)
-	tok := loginToken(t, mux, "akadal", "123456")
+	tok := loginToken(t, mux, "admin", "123456")
 
 	body, _ := json.Marshal(map[string]any{
 		"name":         "dummy",
@@ -180,7 +180,7 @@ func TestStorePathUsesTempDir(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := st.EnsureBootstrapAdmin("akadal", "123456"); err != nil {
+	if err := st.EnsureBootstrapAdmin("admin", "123456"); err != nil {
 		t.Fatal(err)
 	}
 	p := filepath.Join(dir, "store.json")
@@ -219,7 +219,7 @@ func createMachine(t *testing.T, mux http.Handler, tok string) string {
 
 func TestTerminalSessions_createListClose(t *testing.T) {
 	_, mux := testServer(t)
-	tok := loginToken(t, mux, "akadal", "123456")
+	tok := loginToken(t, mux, "admin", "123456")
 	mid := createMachine(t, mux, tok)
 
 	// create two sessions under the same machine

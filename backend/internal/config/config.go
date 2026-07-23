@@ -33,9 +33,10 @@ func Load() Config {
 	if secret == "" {
 		secret = "dev-only-change-me-agent-hub"
 	}
+	// Demo defaults only — override in real deploys via env / .env
 	user := os.Getenv("BOOTSTRAP_ADMIN_USERNAME")
 	if user == "" {
-		user = "akadal"
+		user = "admin"
 	}
 	pass := os.Getenv("BOOTSTRAP_ADMIN_PASSWORD")
 	if pass == "" {

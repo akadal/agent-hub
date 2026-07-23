@@ -3,7 +3,7 @@
 set -euo pipefail
 
 API="${API_BASE:-http://localhost:8080}"
-USER="${E2E_USER:-akadal}"
+USER="${E2E_USER:-admin}"
 PASS="${E2E_PASS:-123456}"
 SSH_ADDR="${E2E_SSH_ADDR:-ssh-target}"
 SSH_PORT="${E2E_SSH_PORT:-22}"

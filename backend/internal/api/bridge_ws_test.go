@@ -67,7 +67,7 @@ func TestBridgeSSH_closesOnClientWSDisconnect(t *testing.T) {
 
 	srv, mux := testServer(t)
 	_ = srv
-	tok := loginToken(t, mux, "akadal", "123456")
+	tok := loginToken(t, mux, "admin", "123456")
 
 	// register machine pointing at live target
 	body := map[string]any{

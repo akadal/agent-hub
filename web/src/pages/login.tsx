@@ -8,7 +8,7 @@ import { useAuth } from '@/lib/auth'
 export function LoginPage() {
   const { login, user, loading } = useAuth()
   const navigate = useNavigate()
-  const [username, setUsername] = useState('akadal')
+  const [username, setUsername] = useState('admin')
   const [password, setPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)

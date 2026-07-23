@@ -9,7 +9,7 @@ import (
 
 func TestTokenService_IssueAndParse(t *testing.T) {
 	ts := auth.NewTokenService("secret-key", time.Hour)
-	tok, exp, err := ts.Issue("uid-1", "akadal", "admin")
+	tok, exp, err := ts.Issue("uid-1", "admin", "admin")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -23,7 +23,7 @@ func TestTokenService_IssueAndParse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if claims.UserID != "uid-1" || claims.Username != "akadal" || claims.Role != "admin" {
+	if claims.UserID != "uid-1" || claims.Username != "admin" || claims.Role != "admin" {
 		t.Fatalf("claims=%+v", claims)
 	}
 }

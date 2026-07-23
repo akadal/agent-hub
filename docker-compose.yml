@@ -9,7 +9,7 @@
 #   Dummy SSH target: localhost:2222 (user root / pass targetpass)
 #   From API container, register address "ssh-target" port 22.
 #
-# Login (bootstrap): akadal / 123456  (override via BOOTSTRAP_ADMIN_*)
+# Login (bootstrap): admin / 123456  (override via BOOTSTRAP_ADMIN_*)
 
 services:
   api:
@@ -24,7 +24,7 @@ services:
       APP_ENV: ${APP_ENV:-development}
       JWT_SECRET: ${JWT_SECRET:-dev-only-change-me-agent-hub}
       JWT_ACCESS_TTL: ${JWT_ACCESS_TTL:-24h}
-      BOOTSTRAP_ADMIN_USERNAME: ${BOOTSTRAP_ADMIN_USERNAME:-akadal}
+      BOOTSTRAP_ADMIN_USERNAME: ${BOOTSTRAP_ADMIN_USERNAME:-admin}
       BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-123456}
       DATA_DIR: /data
       ACCESS_DEFAULT_TAILSCALE_ONLY: ${ACCESS_DEFAULT_TAILSCALE_ONLY:-false}

@@ -11,21 +11,21 @@ func TestBootstrapAndAuthenticate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := st.EnsureBootstrapAdmin("akadal", "123456"); err != nil {
+	if err := st.EnsureBootstrapAdmin("admin", "123456"); err != nil {
 		t.Fatal(err)
 	}
 	// idempotent
-	if err := st.EnsureBootstrapAdmin("akadal", "other"); err != nil {
+	if err := st.EnsureBootstrapAdmin("admin", "other"); err != nil {
 		t.Fatal(err)
 	}
-	u, err := st.Authenticate("akadal", "123456")
+	u, err := st.Authenticate("admin", "123456")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if u.Username != "akadal" || u.Role != "admin" {
+	if u.Username != "admin" || u.Role != "admin" {
 		t.Fatalf("user=%+v", u)
 	}
-	if _, err := st.Authenticate("akadal", "nope"); err != store.ErrInvalidCreds {
+	if _, err := st.Authenticate("admin", "nope"); err != store.ErrInvalidCreds {
 		t.Fatalf("err=%v", err)
 	}
 }

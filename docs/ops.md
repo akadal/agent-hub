@@ -27,7 +27,7 @@ No specific PaaS or control panel is required. Coolify, Traefik, Caddy, nginx, c
 ## 2. Local run (working e2e)
 
 1. Clone the repository.
-2. Optional: `cp .env.example .env` — bootstrap admin defaults to **akadal / 123456** (change in real deploys).
+2. Optional: `cp .env.example .env` — bootstrap admin defaults to **admin / 123456** (change in real deploys).
 3. From repo root: `docker compose up --build`
 4. Open **http://localhost:5173** → sign in with bootstrap admin.
 5. Register a machine:
