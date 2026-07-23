@@ -1,46 +1,187 @@
 # Agent Hub
 
-**Multi-Machine Terminal Dashboard (v1)** — a Go-based web dashboard for managing terminals on machines on your private network (typically Tailscale).
+**Open-source multi-machine terminal dashboard.**  
+Manage SSH hosts from the browser, open **multiple independent terminal sessions per machine**, and keep each task in its own session — similar in spirit to multi-session agent UIs (Claude Code / Codex-style workspace), without locking you to a cloud vendor.
 
-Multi-user access, a permission matrix, mandatory audit logging, and tmux-backed persistent sessions in the browser (React + xterm.js). Run it locally with Docker Compose, or deploy it anywhere Compose works so you can reach it from a phone or other devices.
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-## Stack (planned)
+---
 
-| Layer | Choice |
-|-------|--------|
-| Backend | Go |
-| Frontend | React + xterm.js (responsive UI) |
-| Sessions | tmux |
-| Auth | JWT + local users; Tailscale identity preferred when available |
-| Run / ship | Docker Compose (local first; any host/Paas that runs Compose) |
+## Why Agent Hub?
+
+When you work across several hosts (or several jobs on one host), juggling SSH tabs becomes messy. Agent Hub gives you:
+
+- A **machine inventory** you control (manual register by IP/hostname — no auto-discovery)
+- A **session workspace**: under each machine, create named terminals (`build`, `debug`, `logs`, …), switch between them, close what you don’t need
+- **Browser terminals** powered by xterm.js over a WebSocket → SSH bridge
+- **Local-first packaging** with Docker Compose (and a dummy SSH target for demos)
+
+Tailscale (or any VPN) can sit under your network path, but **it is not required** — plain SSH by address is enough.
+
+---
+
+## Features
+
+| Area | What’s included |
+|------|------------------|
+| Auth | Local users, JWT sessions, bootstrap admin from env |
+| Machines | Register / list / delete by IP or hostname + SSH credentials |
+| Sessions | 1:N named terminal sessions under a machine; create, switch, close |
+| Terminal | Interactive xterm.js UI + one-shot `exec` API for automation |
+| Remote channel | SSH (password today; keys later) |
+| Ops | Docker Compose: `api`, `web`, optional `ssh-target` for e2e |
+
+**Not in this release (planned):** tmux durability, fine-grained multi-user permissions UI, full audit product, Tailscale identity login.
+
+---
+
+## Quick start
+
+### Requirements
+
+- Docker + Docker Compose
+- (Optional for local dev) Go 1.22+, Node 20+
+
+### Run with Compose
+
+```bash
+git clone https://github.com/akadal/agent-hub.git
+cd agent-hub
+cp .env.example .env   # optional; defaults work for local demo
+docker compose up --build
+```
+
+| Service | URL |
+|---------|-----|
+| Web UI | http://localhost:5173 |
+| API | http://localhost:8080 |
+| Demo SSH host | `localhost:2222` (`root` / `targetpass`) |
+
+**Default login** (change for any real deploy):
+
+- Username: `akadal`
+- Password: `123456`
+
+These come from `BOOTSTRAP_ADMIN_USERNAME` / `BOOTSTRAP_ADMIN_PASSWORD`.
+
+### First minutes
+
+1. Sign in at the web UI.
+2. **Machines** → register the demo host:
+   - Address: `ssh-target` (Compose DNS — API talks to the dummy container)
+   - Port: `22`
+   - User / password: `root` / `targetpass`
+3. **Workspace** → select the machine → **New session** (create several for different tasks) → use the terminal pane.
+
+Automated smoke (with the stack running):
+
+```bash
+./scripts/e2e-smoke.sh
+```
+
+---
+
+## Architecture (short)
+
+```
+Browser (React + xterm.js)
+    │  HTTPS / WS
+    ▼
+Agent Hub API (Go)  ──JWT──►  local user store
+    │
+    │  SSH (per session / exec)
+    ▼
+Your machines (or Compose ssh-target)
+```
+
+- UI shell: Vite + React + TypeScript + shadcn/ui ([satnaing/shadcn-admin](https://github.com/satnaing/shadcn-admin) baseline)
+- API: Go HTTP + WebSocket, file-backed store for users / machines / sessions
+- Remote access: **SSH by IP** ([ADR-005](docs/decisions.md))
+
+---
+
+## Configuration
+
+Copy [`.env.example`](.env.example). Important variables:
+
+| Variable | Purpose |
+|----------|---------|
+| `JWT_SECRET` | Signing key for access tokens |
+| `BOOTSTRAP_ADMIN_USERNAME` / `_PASSWORD` | First admin (created if missing) |
+| `DATA_DIR` | Persistent store directory (Compose volume `/data`) |
+| `VITE_API_BASE_URL` | Browser-facing API origin (default `http://localhost:8080`) |
+| `ACCESS_DEFAULT_TAILSCALE_ONLY` | Network policy default; `false` for open local demos |
+
+---
+
+## Development
+
+```bash
+# API
+cd backend && go run ./cmd/agent-hub
+
+# Web (proxies /api and /health to :8080)
+cd web && npm install && npm run dev
+
+# Tests
+cd backend && go test ./...
+```
+
+---
+
+## Project layout
+
+```
+.
+├── backend/           # Go API (auth, machines, terminal sessions, SSH)
+├── web/               # React SPA (workspace, machines, login)
+├── deploy/ssh-target/ # Minimal OpenSSH container for demos / e2e
+├── docs/              # PRD, backlog, ADRs, ops
+├── scripts/           # e2e smoke helpers
+├── docker-compose.yml
+└── AGENTS.md          # Map for coding agents
+```
+
+---
 
 ## Documentation
 
-| Audience | Start here |
-|----------|------------|
-| **Coding agents / AI** | [`AGENTS.md`](AGENTS.md) — maps every task to the right doc |
-| **Product requirements** | [`docs/prd.md`](docs/prd.md) |
-| **Backlog** | [`docs/backlog.md`](docs/backlog.md) |
-| **Domain model** | [`docs/ddd.md`](docs/ddd.md) |
-| **Tech debt** | [`docs/debt.md`](docs/debt.md) |
-| **Architecture** | [`docs/architecture.md`](docs/architecture.md) |
-| **Ops / run / deploy** | [`docs/ops.md`](docs/ops.md) |
-| **Decisions (ADRs)** | [`docs/decisions.md`](docs/decisions.md) |
+| Doc | Content |
+|-----|---------|
+| [`AGENTS.md`](AGENTS.md) | Entry map for humans & coding agents |
+| [`docs/prd.md`](docs/prd.md) | Product requirements |
+| [`docs/backlog.md`](docs/backlog.md) | Milestones |
+| [`docs/architecture.md`](docs/architecture.md) | System sketch |
+| [`docs/ops.md`](docs/ops.md) | Run / deploy notes |
+| [`docs/decisions.md`](docs/decisions.md) | ADRs |
 
-This README is a short overview. Full product contract and v1 non-goals live in the PRD, not here.
+---
 
-## Quick intent
+## Security notes
 
-- **Config:** copy [`.env.example`](.env.example) → `.env` (never commit secrets).
-- **Local:** `docker compose up` (once packaging lands) for development and single-operator use.
-- **Remote / mobile:** Deploy the same Compose stack behind your reverse proxy or platform of choice; UI must be usable on small screens.
+- Bootstrap credentials in `.env.example` are for **local demos only** — change them before any shared or internet-facing deploy.
+- SSH passwords are stored in the API data directory for the bridge; treat `DATA_DIR` as sensitive.
+- Prefer private networks (VPN / Tailscale / LAN) for production access; TLS and reverse proxies are operator-provided.
 
-## v1 non-goals (summary)
+---
 
-- No RDP/VNC  
-- No file transfer  
-- No automatic device discovery  
+## Contributing
+
+Issues and pull requests are welcome. For larger changes, open an issue first and check `docs/prd.md` / `docs/backlog.md` so scope stays aligned.
+
+1. Fork and branch from `main`
+2. Keep changes focused; add/adjust tests under `backend/`
+3. Run `go test ./...` and (if Compose is up) `./scripts/e2e-smoke.sh`
+4. Open a PR with a clear description
+
+---
+
+## License
+
+MIT — see [LICENSE](LICENSE).
+
+---
 
 ## Status
 
-Repository bootstrap: documentation structure in place. Application code and packaging land with the backlog milestones.
+Actively usable as a **self-hosted skeleton**: login, machines, multi-session workspace, SSH exec/interactive terminal, Compose packaging. Production hardening (keys, tmux persistence, permissions, audit UI) is tracked in the backlog.

@@ -14,7 +14,8 @@ Track known shortcuts, accepted risks, and items to revisit. Prefer linking a ba
 
 | ID | Date | Area | Description | Risk | Status |
 |----|------|------|-------------|------|--------|
-| — | — | — | *None yet — project bootstrap is docs-only.* | — | — |
+| D-001 | 2026-07-23 | FE | v0.1 web shell is shadcn-admin-*aligned* (Vite/React/TS/shadcn layout) not a full vendor copy of satnaing/shadcn-admin demos | Low — patterns match ADR-006; may re-sync primitives as product pages grow | open |
+| D-002 | 2026-07-23 | FE build | Web image uses `npm install` (not `npm ci`) due to optional platform lock drift on linux | Medium — less reproducible installs; revisit lockfile generation | open |
 
 ---
 

@@ -1,0 +1,69 @@
+# Agent Hub — local-first Docker Compose stack
+# Usage:
+#   cp .env.example .env
+#   docker compose up --build
+#
+# Endpoints (host):
+#   API:  http://localhost:8080
+#   Web:  http://localhost:5173
+#   Dummy SSH target: localhost:2222 (user root / pass targetpass)
+#   From API container, register address "ssh-target" port 22.
+#
+# Login (bootstrap): akadal / 123456  (override via BOOTSTRAP_ADMIN_*)
+
+services:
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: agent-hub-api
+    ports:
+      - "${API_PORT:-8080}:8080"
+    environment:
+      HTTP_ADDR: ":8080"
+      APP_ENV: ${APP_ENV:-development}
+      JWT_SECRET: ${JWT_SECRET:-dev-only-change-me-agent-hub}
+      JWT_ACCESS_TTL: ${JWT_ACCESS_TTL:-24h}
+      BOOTSTRAP_ADMIN_USERNAME: ${BOOTSTRAP_ADMIN_USERNAME:-akadal}
+      BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-123456}
+      DATA_DIR: /data
+      ACCESS_DEFAULT_TAILSCALE_ONLY: ${ACCESS_DEFAULT_TAILSCALE_ONLY:-false}
+    volumes:
+      - api-data:/data
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    depends_on:
+      ssh-target:
+        condition: service_started
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8080}
+    container_name: agent-hub-web
+    ports:
+      - "${WEB_PORT:-5173}:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Dummy remote host for e2e: register as address=ssh-target, port=22
+  ssh-target:
+    build:
+      context: ./deploy/ssh-target
+      dockerfile: Dockerfile
+    container_name: agent-hub-ssh-target
+    ports:
+      - "${SSH_TARGET_PORT:-2222}:22"
+    restart: unless-stopped
+
+volumes:
+  api-data:

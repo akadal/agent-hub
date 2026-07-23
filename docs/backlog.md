@@ -1,6 +1,6 @@
 # Backlog — Agent Hub v1
 
-Ordered milestones for the Multi-Machine Terminal Dashboard. Items are product/engineering epics, not sprint tickets. Implementation is out of scope for the docs-only bootstrap.
+Ordered milestones for the Multi-Machine Terminal Dashboard. Items are product/engineering epics, not sprint tickets.
 
 **Status key:** `todo` · `in_progress` · `done` · `blocked`
 
@@ -10,11 +10,11 @@ Ordered milestones for the Multi-Machine Terminal Dashboard. Items are product/e
 
 | ID | Item | Status |
 |----|------|--------|
-| M0.1 | Go backend module + health endpoint | todo |
-| M0.2 | React frontend shell (responsive layout baseline) | todo |
-| M0.3 | Docker Compose for local run (app + deps) | todo |
-| M0.4 | Deploy docs: self-host the same Compose stack (generic; no required PaaS) | todo |
-| M0.5 | Local JWT auth + user store (bootstrap admin) | todo |
+| M0.1 | Go backend module + health endpoint | done |
+| M0.2 | React frontend shell (responsive layout baseline; satnaing/shadcn-admin) | done |
+| M0.3 | Docker Compose for local run (app + deps) | done |
+| M0.4 | Deploy docs: self-host the same Compose stack (generic; no required PaaS) | done |
+| M0.5 | Local JWT auth + user store (bootstrap admin) | done |
 
 ---
 
@@ -22,10 +22,10 @@ Ordered milestones for the Multi-Machine Terminal Dashboard. Items are product/e
 
 | ID | Item | Status |
 |----|------|--------|
-| M1.1 | Username + password login (fallback path) | todo |
-| M1.2 | JWT issue/refresh/logout | todo |
+| M1.1 | Username + password login (fallback path) | done |
+| M1.2 | JWT issue/refresh/logout | done |
 | M1.3 | Tailscale identity integration (preferred when available) | todo |
-| M1.4 | Bootstrap / recovery admin path for self-hosted ops | todo |
+| M1.4 | Bootstrap / recovery admin path for self-hosted ops | done |
 
 ---
 
@@ -33,9 +33,9 @@ Ordered milestones for the Multi-Machine Terminal Dashboard. Items are product/e
 
 | ID | Item | Status |
 |----|------|--------|
-| M2.1 | Manual register: “New device” → IP → persist machine | todo |
-| M2.2 | List / view / disable or remove machines | todo |
-| M2.3 | Reachability check (best-effort; no auto-discovery) | todo |
+| M2.1 | Manual register: “New device” → IP → persist machine | done |
+| M2.2 | List / view / disable or remove machines | done |
+| M2.3 | Reachability check (best-effort; no auto-discovery) | done |
 
 ---
 
@@ -43,11 +43,11 @@ Ordered milestones for the Multi-Machine Terminal Dashboard. Items are product/e
 
 | ID | Item | Status |
 |----|------|--------|
-| M3.1 | 1:N terminals under a machine | todo |
-| M3.2 | xterm.js UI for interactive shell (desktop + usable mobile) | todo |
+| M3.1 | 1:N terminals under a machine (named sessions + workspace UI) | done |
+| M3.2 | xterm.js UI for interactive shell (desktop + usable mobile) | done |
 | M3.3 | tmux-backed persistent sessions | todo |
 | M3.4 | Reconnect / reattach after browser disconnect | todo |
-| M3.5 | Backend bridge: dashboard ↔ remote shell/tmux (agent or SSH—TBD in architecture) | todo |
+| M3.5 | Backend bridge: dashboard ↔ remote shell via **SSH** (ADR-005) | done |
 
 ---
 

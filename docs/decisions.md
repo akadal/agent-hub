@@ -54,15 +54,27 @@ Lightweight log of decisions that affect structure. Full product requirements st
 
 ---
 
-## ADR-005: Remote execution channel
+## ADR-005: Remote execution channel — SSH by IP
 
 | Field | Value |
 |-------|--------|
-| Status | proposed |
+| Status | accepted |
+| Date | 2026-07-24 |
+| Context | Dashboard must open shells on registered machines. Tailscale is a preferred *network* path for operators but must not be required for local e2e or self-host. |
+| Decision | **v1 remote channel is SSH** to the manually registered **IP/hostname** (optional port, SSH user + password for bootstrap; keys later). **Tailscale is optional** (identity/ingress later) — not required to register a machine or open a terminal. Compose ships a **dummy SSH target** (`ssh-target`) for e2e. Interactive sessions use WebSocket + PTY; one-shot commands use `POST /api/machines/{id}/exec`. tmux persistence remains a follow-on enhancement on top of SSH. |
+| Consequences | API and UI collect address + SSH credentials. Operators on a mesh simply register Tailscale IPs the same way. No Tailscale daemon dependency in the control plane for this path. |
+
+---
+
+## ADR-006: Frontend UI shell — satnaing/shadcn-admin
+
+| Field | Value |
+|-------|--------|
+| Status | accepted |
 | Date | 2026-07-23 |
-| Context | Dashboard must open shells on registered machines. |
-| Decision | **TBD** before Milestone 3 (SSH+tmux vs agent vs other). |
-| Consequences | Blocks final architecture of terminal gateway; track in `docs/architecture.md` and `docs/debt.md` watch list. |
+| Context | Need a ready React admin shell that is minimal/modern, responsive, MIT-friendly, and easy for agentic development—without inventing a design system from scratch. |
+| Decision | Base the Agent Hub web UI on **[satnaing/shadcn-admin](https://github.com/satnaing/shadcn-admin)** as the dashboard shell baseline: **Vite + React + TypeScript + Tailwind + shadcn/ui**. Keep shadcn primitives and admin layout patterns; strip demo-only surfaces (Clerk sample auth, chart-heavy showcase pages) as needed. Product pages (machines, terminals, users, permissions, audit) replace demos over milestones. Do **not** adopt MUI/Ant as the primary component system. |
+| Consequences | FE lives under `web/` with Vite/React/shadcn stack; architecture docs and Docker packaging target this shell. xterm.js embeds into product routes later (M3). New UI work prefers shadcn/ui components and the established layout chrome. |
 
 ---
 

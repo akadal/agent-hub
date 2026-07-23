@@ -7,7 +7,7 @@ Thin technical sketch. Product truth lives in `docs/prd.md`. Domain language liv
 ## 1. System context
 
 ```
-[Browser: React + xterm.js]
+[Browser: React + shadcn-admin shell + xterm.js (later)]
         │  HTTP(S)  — local or self-hosted
         ▼
 [Agent Hub — Go API + WS/stream]
@@ -22,13 +22,23 @@ Thin technical sketch. Product truth lives in `docs/prd.md`. Domain language liv
 - **No** RDP/VNC or file-transfer plane in v1.
 - **No** hard dependency on a single hosting vendor.
 
+### Implemented e2e surface
+
+| Piece | Path / port | Notes |
+|-------|-------------|--------|
+| **API** | `backend/` · `http://localhost:8080` | JWT login, machines CRUD, `POST …/exec`, WS terminal |
+| **Web UI** | `web/` · `http://localhost:5173` | Login, machines, xterm.js terminal (ADR-006) |
+| **Dummy SSH** | `deploy/ssh-target` · host `2222` | Compose service `ssh-target` (`root`/`targetpass`) |
+| **Compose** | `docker-compose.yml` | `api` + `web` + `ssh-target` |
+| **Remote channel** | ADR-005 | **SSH by IP/hostname** — Tailscale not required |
+
 ---
 
-## 2. Components (planned)
+## 2. Components
 
 | Component | Responsibility |
 |-----------|----------------|
-| **Web UI** | React SPA; machine list; terminal panes (xterm.js); settings; permission admin; responsive layout |
+| **Web UI** | React SPA on **satnaing/shadcn-admin** baseline (Vite, TypeScript, Tailwind, shadcn/ui); machine list; terminal panes (xterm.js later); settings; permission admin; responsive layout |
 | **API** | Go HTTP/JSON; auth; CRUD for users, machines, terminals, permissions; audit query |
 | **Terminal gateway** | Bidirectional stream (WebSocket or similar) between xterm and remote tmux/PTY |
 | **Auth** | JWT; local users; Tailscale identity when available |
@@ -72,10 +82,15 @@ Thin technical sketch. Product truth lives in `docs/prd.md`. Domain language liv
 
 ---
 
-## 7. Open technical decisions
+## 7. Related ADRs
 
-- DB choice (SQLite vs Postgres, etc.)
-- How the control plane reaches tmux on each machine
-- Tailscale identity verification details
-- WebSocket auth (cookie vs query token vs first-message JWT)
-- Mobile terminal UX details (virtual keyboard, font size, pane chrome)
+- ADR-001 — product stack (Go, React, tmux, JWT, Compose)
+- ADR-006 — FE shell: satnaing/shadcn-admin (Vite + React + TS + shadcn/ui)
+
+## 8. Open technical decisions
+
+- DB choice (file store today; SQLite/Postgres later)
+- tmux session persistence on top of SSH (M3.3)
+- SSH key auth / secret vault (password OK for local e2e)
+- Tailscale identity verification details (optional)
+- Mobile terminal UX polish

@@ -24,27 +24,51 @@ No specific PaaS or control panel is required. Coolify, Traefik, Caddy, nginx, c
 
 ---
 
-## 2. Local run (intended)
+## 2. Local run (working e2e)
 
 1. Clone the repository.
-2. Configure env from a sample file (e.g. `.env.example` → `.env`) — secrets never committed.
-3. `docker compose up` (exact command TBD when packaging lands).
-4. Open the printed local URL; complete bootstrap admin if first start.
-5. Verify health endpoint and login.
+2. Optional: `cp .env.example .env` — bootstrap admin defaults to **akadal / 123456** (change in real deploys).
+3. From repo root: `docker compose up --build`
+4. Open **http://localhost:5173** → sign in with bootstrap admin.
+5. Register a machine:
+   - **Address:** `ssh-target` (Compose DNS; API reaches dummy SSH on the same network)
+   - **Port:** `22`
+   - **SSH user / password:** `root` / `targetpass`
+6. Use **Probe SSH** or **Open terminal** (xterm.js over WebSocket).
 
-*Service list and ports will be filled with M0.3.*
+| Service | Compose name | Host port | Notes |
+|---------|--------------|-----------|--------|
+| API | `api` | **8080** | JWT auth; machines; SSH exec + WS terminal |
+| Web | `web` | **5173** → 80 | SPA; login + machines + terminal |
+| Dummy SSH | `ssh-target` | **2222** → 22 | e2e target only (`root`/`targetpass`) |
+
+**Remote channel:** SSH to registered IP/hostname. **Tailscale is not required** for this path (optional mesh later).
+
+Automated smoke:
+
+```bash
+./scripts/e2e-smoke.sh
+```
+
+Local dev without Compose:
+
+```bash
+cd backend && go run ./cmd/agent-hub
+cd web && npm install && npm run dev   # proxies /api and /health to :8080
+# Point a machine at a real SSH host or map ssh-target via host port 2222
+```
 
 ---
 
-## 3. Deploy (intended, generic)
+## 3. Deploy (generic)
 
-1. Build or pull images defined by the Compose file.
-2. Run the stack on a host reachable from clients that need access (including mobile).
+1. Build or pull images: `docker compose build` (or your registry workflow).
+2. Run the same stack on a host reachable from clients that need access (including mobile).
 3. Put TLS and hostname in front via your reverse proxy / platform.
 4. Restrict ingress (prefer Tailscale or VPN; open WAN only with clear AccessPolicy intent).
-5. Verify health endpoint and login from a second device (e.g. phone).
+5. Verify `GET /health` and the web UI from a second device (e.g. phone).
 
-Optional: hook git push to rebuild/redeploy on your platform of choice.
+Optional: hook git push to rebuild/redeploy on your platform of choice. Override ports with `API_PORT` / `WEB_PORT` env if needed.
 
 ---
 

@@ -11,7 +11,10 @@ It is **not** a second PRD. Open the linked doc for full content.
 
 Open-source Go web dashboard for managing terminals on private-network machines (Tailscale-centric by default): multi-user, permission matrix, mandatory audit log, tmux-persistent sessions, React + xterm.js UI (responsive), Docker Compose for local run and self-hosted deploy.
 
-**Stack (v1):** Go · React + xterm.js · tmux · JWT + local users (Tailscale preferred) · Docker Compose
+**Stack (v1):** Go · React + xterm.js · tmux · JWT + local users (Tailscale preferred) · Docker Compose  
+**FE shell (ADR-006):** Vite + React + TypeScript + shadcn/ui (baseline [satnaing/shadcn-admin](https://github.com/satnaing/shadcn-admin)) under `web/`; API under `backend/`.
+
+**Status:** Working e2e — JWT admin, machines, **multi-session workspace** (1:N terminals per machine), SSH exec + xterm, Compose dummy `ssh-target`. Tailscale not required (ADR-005).
 
 Do **not** hardcode operator-specific hostnames, personal domains, or a single PaaS into docs or code. Treat deploy target as operator-configured.
 
@@ -38,6 +41,9 @@ Do **not** hardcode operator-specific hostnames, personal domains, or a single P
 .
 ├── AGENTS.md          ← you are here (agent router)
 ├── README.md          ← human-facing overview
+├── docker-compose.yml
+├── backend/           ← Go API (cmd/agent-hub, internal/api)
+├── web/               ← Vite + React + shadcn/ui shell
 └── docs/
     ├── prd.md         ← product source of truth
     ├── backlog.md     ← ordered v1 work
@@ -66,7 +72,7 @@ All product/engineering markdown **except** this file and `README.md` lives unde
 
 ## Implementation status
 
-Docs bootstrap only. Application source (Go/React), Compose, and CI are **not** required until backlog milestones are executed.
+v0.1 skeleton is in-repo (`backend/`, `web/`, `docker-compose.yml`). Remaining product features follow `docs/backlog.md` milestones (auth, machines, terminals, …).
 
 When implementation starts:
 
