@@ -428,15 +428,20 @@ func (s *Server) bridgeSSH(w http.ResponseWriter, r *http.Request, m store.Machi
 		}
 	}()
 
+readLoop:
 	for {
 		var msg wsClientMsg
 		if err := conn.ReadJSON(&msg); err != nil {
-			break
+			// Client closed WS (session switch/tab close). Tear down SSH
+			// immediately so the stdout reader unblocks — otherwise we leak
+			// ESTABLISHED SSH connections forever waiting on <-done.
+			break readLoop
 		}
 		switch msg.Type {
 		case "stdin", "input":
 			if _, err := sess.Stdin().Write([]byte(msg.Data)); err != nil {
 				_ = conn.WriteJSON(wsServerMsg{Type: "error", Message: "stdin write: " + err.Error()})
+				break readLoop
 			}
 		case "resize":
 			if msg.Cols > 0 && msg.Rows > 0 {
@@ -446,7 +451,13 @@ func (s *Server) bridgeSSH(w http.ResponseWriter, r *http.Request, m store.Machi
 			_ = conn.WriteJSON(wsServerMsg{Type: "pong"})
 		}
 	}
-	<-done
+	// Always close SSH before waiting: unblocks stdout Read and drops TCP.
+	_ = sess.Close()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		s.logf("bridgeSSH: stdout pump did not exit within 5s after WS close")
+	}
 }
 
 func (s *Server) requireAuth(next http.HandlerFunc) http.HandlerFunc {
