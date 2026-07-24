@@ -163,25 +163,12 @@ func OpenSession(t Target, remoteSession string, cols, rows int) (*Session, erro
 		return nil, err
 	}
 
-	// Force a UTF-8 locale for the remote shell. Without this, hosts with C/POSIX
-	// locale mangle multi-byte characters (Turkish ğ, ş, ı, …). Prefer existing
-	// user locale when already set on the host.
-	const utf8Env = `export LANG="${LANG:-C.UTF-8}" LC_ALL="${LC_ALL:-C.UTF-8}" LC_CTYPE="${LC_CTYPE:-C.UTF-8}"; `
-
-	// Prefer durable tmux session; fall back to plain shell if tmux missing.
-	startErr := error(nil)
-	if remoteSession != "" && safeSessionName.MatchString(remoteSession) {
-		// -A: attach if exists, else create. -u: force UTF-8 in tmux.
-		// Survives browser close/mobile switch.
-		cmd := utf8Env + fmt.Sprintf("tmux -u new-session -A -s %s || exec ${SHELL:-/bin/bash} -l", remoteSession)
-		startErr = sess.Start(cmd)
-	} else {
-		startErr = sess.Start(utf8Env + "exec ${SHELL:-/bin/bash} -l")
-	}
-	if startErr != nil {
+	// Prefer durable tmux when available; plain login shell otherwise.
+	// See remoteShellCmd: macOS SSH often lacks Homebrew on PATH.
+	if err := sess.Start(remoteShellCmd(remoteSession)); err != nil {
 		sess.Close()
 		client.Close()
-		return nil, fmt.Errorf("start shell: %w", startErr)
+		return nil, fmt.Errorf("start shell: %w", err)
 	}
 
 	s := &Session{
@@ -251,6 +238,31 @@ func KillRemoteSession(t Target, remoteSession string) error {
 	if remoteSession == "" || !safeSessionName.MatchString(remoteSession) {
 		return nil
 	}
-	_, err := RunCommand(t, fmt.Sprintf("tmux kill-session -t %s 2>/dev/null || true", remoteSession))
+	// Same PATH hint as interactive sessions (Homebrew on macOS).
+	cmd := `export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"; ` +
+		fmt.Sprintf("tmux kill-session -t %s 2>/dev/null || true", remoteSession)
+	_, err := RunCommand(t, cmd)
 	return err
+}
+
+// remoteShellCmd is the remote PTY command: UTF-8 locale, Homebrew-aware PATH,
+// optional durable tmux (-A attach-or-create, -u UTF-8), else login shell.
+// Non-interactive SSH skips ~/.zprofile, so brew's /opt/homebrew/bin is often missing
+// even when `brew install tmux` succeeded in a local Terminal window.
+func remoteShellCmd(remoteSession string) string {
+	// Force UTF-8 so Turkish and other multi-byte chars survive (C/POSIX locales mangle them).
+	const prefix = `export LANG="${LANG:-C.UTF-8}" LC_ALL="${LC_ALL:-C.UTF-8}" LC_CTYPE="${LC_CTYPE:-C.UTF-8}"; ` +
+		`export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"; `
+	if remoteSession == "" || !safeSessionName.MatchString(remoteSession) {
+		return prefix + `exec ${SHELL:-/bin/bash} -l`
+	}
+	// Resolve tmux without printing "command not found" into the PTY.
+	return prefix + fmt.Sprintf(
+		`TMUX_BIN="$(command -v tmux 2>/dev/null || true)"; `+
+			`if [ -z "$TMUX_BIN" ] && [ -x /opt/homebrew/bin/tmux ]; then TMUX_BIN=/opt/homebrew/bin/tmux; fi; `+
+			`if [ -z "$TMUX_BIN" ] && [ -x /usr/local/bin/tmux ]; then TMUX_BIN=/usr/local/bin/tmux; fi; `+
+			`if [ -n "$TMUX_BIN" ]; then exec "$TMUX_BIN" -u new-session -A -s %s; fi; `+
+			`exec ${SHELL:-/bin/bash} -l`,
+		remoteSession,
+	)
 }
