@@ -107,6 +107,7 @@ Copy [`.env.example`](.env.example). Important variables:
 | Variable | Purpose |
 |----------|---------|
 | `JWT_SECRET` | Signing key for access tokens |
+| `JWT_ACCESS_TTL` | `forever` (default) or Go duration (`24h`); no login re-auth when forever |
 | `BOOTSTRAP_ADMIN_USERNAME` / `_PASSWORD` | First admin (created if missing) |
 | `DATA_DIR` | Persistent store directory (Compose volume `/data`) |
 | `VITE_API_BASE_URL` | Browser-facing API origin (default `http://localhost:8080`) |

@@ -23,7 +23,8 @@ services:
       HTTP_ADDR: ":8080"
       APP_ENV: ${APP_ENV:-development}
       JWT_SECRET: ${JWT_SECRET:-dev-only-change-me-agent-hub}
-      JWT_ACCESS_TTL: ${JWT_ACCESS_TTL:-24h}
+      # forever | 0 | never | or Go duration e.g. 24h
+      JWT_ACCESS_TTL: ${JWT_ACCESS_TTL:-forever}
       BOOTSTRAP_ADMIN_USERNAME: ${BOOTSTRAP_ADMIN_USERNAME:-admin}
       BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-123456}
       DATA_DIR: /data

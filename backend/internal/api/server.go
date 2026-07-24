@@ -98,9 +98,10 @@ type loginRequest struct {
 }
 
 type loginResponse struct {
-	Token     string    `json:"token"`
-	ExpiresAt time.Time `json:"expires_at"`
-	User      userView  `json:"user"`
+	Token string `json:"token"`
+	// ExpiresAt is null when JWT has no expiry (forever).
+	ExpiresAt *time.Time `json:"expires_at"`
+	User      userView   `json:"user"`
 }
 
 type userView struct {
@@ -129,9 +130,13 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "token issue failed")
 		return
 	}
+	var expPtr *time.Time
+	if !exp.IsZero() {
+		expPtr = &exp
+	}
 	writeJSON(w, http.StatusOK, loginResponse{
 		Token:     tok,
-		ExpiresAt: exp,
+		ExpiresAt: expPtr,
 		User:      userView{ID: u.ID, Username: u.Username, Role: u.Role},
 	})
 }

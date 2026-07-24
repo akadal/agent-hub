@@ -462,6 +462,7 @@ function SessionTerminal({
           setStatus('error')
           term.writeln(`\r\n\x1b[31m${msg.message}\x1b[0m`)
         } else if (msg.type === 'ready') setStatus('ssh ready')
+        // pong ignored
       } catch {
         term.write(String(ev.data))
       }
@@ -472,6 +473,13 @@ function SessionTerminal({
         ws.send(JSON.stringify({ type: 'stdin', data }))
       }
     })
+
+    // Application-level ping so proxies / idle paths do not kill the WS
+    const pingTimer = window.setInterval(() => {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'ping' }))
+      }
+    }, 25_000)
 
     const onResize = () => {
       if (!fitRef.current || !termRef.current) return
@@ -489,6 +497,7 @@ function SessionTerminal({
     window.addEventListener('resize', onResize)
 
     return () => {
+      window.clearInterval(pingTimer)
       window.removeEventListener('resize', onResize)
       dataDisp.dispose()
       ws.close()

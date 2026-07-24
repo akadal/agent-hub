@@ -26,7 +26,8 @@ export type TerminalSession = {
 
 export type LoginResult = {
   token: string
-  expires_at: string
+  /** null/omitted when JWT has no expiry (forever) */
+  expires_at?: string | null
   user: User
 }
 

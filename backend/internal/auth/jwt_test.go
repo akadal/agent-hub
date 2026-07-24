@@ -38,3 +38,27 @@ func TestTokenService_RejectsTampered(t *testing.T) {
 		t.Fatal("expected error for tampered token")
 	}
 }
+
+func TestTokenService_ForeverNoExpiry(t *testing.T) {
+	ts := auth.NewTokenService("secret-key", 0) // forever
+	tok, exp, err := ts.Issue("uid-1", "admin", "admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tok == "" {
+		t.Fatal("empty token")
+	}
+	if !exp.IsZero() {
+		t.Fatalf("expected zero expiresAt for forever token, got %v", exp)
+	}
+	claims, err := ts.Parse(tok)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claims.ExpiresAt != nil {
+		t.Fatalf("expected no ExpiresAt claim, got %v", claims.ExpiresAt)
+	}
+	if claims.Username != "admin" {
+		t.Fatalf("username=%q", claims.Username)
+	}
+}

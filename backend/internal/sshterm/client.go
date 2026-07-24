@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"sync"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -18,10 +19,14 @@ type Target struct {
 	Password string
 }
 
-// dialTimeout is used for SSH TCP connect.
-const dialTimeout = 8 * time.Second
+// dialTimeout is only for the initial TCP connect, not session lifetime.
+const dialTimeout = 15 * time.Second
 
-// Dial opens an authenticated SSH client.
+// keepaliveInterval sends SSH-level keepalives so idle shells are not dropped.
+const keepaliveInterval = 30 * time.Second
+
+// Dial opens an authenticated SSH client with TCP + SSH keepalives.
+// The client does not impose an idle timeout; sessions stay up until closed.
 func Dial(t Target) (*ssh.Client, error) {
 	if t.Port <= 0 {
 		t.Port = 22
@@ -36,9 +41,25 @@ func Dial(t Target) (*ssh.Client, error) {
 		},
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(), // local e2e / operator-managed hosts
 		Timeout:         dialTimeout,
+		// No ClientConfig field for session idle timeout — we keep the connection alive.
 	}
 	addr := net.JoinHostPort(t.Address, fmt.Sprintf("%d", t.Port))
-	return ssh.Dial("tcp", addr, cfg)
+
+	raw, err := net.DialTimeout("tcp", addr, dialTimeout)
+	if err != nil {
+		return nil, err
+	}
+	if tcp, ok := raw.(*net.TCPConn); ok {
+		_ = tcp.SetKeepAlive(true)
+		_ = tcp.SetKeepAlivePeriod(keepaliveInterval)
+	}
+
+	cc, chans, reqs, err := ssh.NewClientConn(raw, addr, cfg)
+	if err != nil {
+		_ = raw.Close()
+		return nil, err
+	}
+	return ssh.NewClient(cc, chans, reqs), nil
 }
 
 // ExecResult is the outcome of a one-shot remote command.
@@ -81,15 +102,18 @@ func RunCommand(t Target, cmd string) (ExecResult, error) {
 	return res, nil
 }
 
-// Session is an interactive SSH PTY session.
+// Session is an interactive SSH PTY session with background keepalives.
 type Session struct {
 	client  *ssh.Client
 	session *ssh.Session
 	stdin   io.WriteCloser
 	stdout  io.Reader
+
+	stopOnce sync.Once
+	stopKA   chan struct{}
 }
 
-// OpenSession starts an interactive shell with a PTY.
+// OpenSession starts an interactive shell with a PTY and keepalives.
 func OpenSession(t Target, cols, rows int) (*Session, error) {
 	if cols <= 0 {
 		cols = 80
@@ -133,7 +157,33 @@ func OpenSession(t Target, cols, rows int) (*Session, error) {
 		client.Close()
 		return nil, fmt.Errorf("start shell: %w", err)
 	}
-	return &Session{client: client, session: sess, stdin: stdin, stdout: stdout}, nil
+
+	s := &Session{
+		client:  client,
+		session: sess,
+		stdin:   stdin,
+		stdout:  stdout,
+		stopKA:  make(chan struct{}),
+	}
+	go s.keepaliveLoop()
+	return s, nil
+}
+
+func (s *Session) keepaliveLoop() {
+	t := time.NewTicker(keepaliveInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-s.stopKA:
+			return
+		case <-t.C:
+			// OpenSSH-compatible keepalive; prevents idle NAT/firewall drops.
+			_, _, err := s.client.SendRequest("keepalive@openssh.com", true, nil)
+			if err != nil {
+				return
+			}
+		}
+	}
 }
 
 // Stdin returns the remote shell stdin.
@@ -149,6 +199,11 @@ func (s *Session) Resize(cols, rows int) error {
 
 // Close tears down the session and client.
 func (s *Session) Close() error {
+	s.stopOnce.Do(func() {
+		if s.stopKA != nil {
+			close(s.stopKA)
+		}
+	})
 	var err error
 	if s.session != nil {
 		err = s.session.Close()

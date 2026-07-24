@@ -3,26 +3,35 @@ package config
 import (
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
 // Config holds runtime settings from the environment.
 type Config struct {
-	HTTPAddr                 string
-	JWTSecret                string
-	JWTAccessTTL             time.Duration
-	BootstrapAdminUsername   string
-	BootstrapAdminPassword   string
-	DataDir                  string
+	HTTPAddr                   string
+	JWTSecret                  string
+	JWTAccessTTL               time.Duration // <=0 means never expire
+	BootstrapAdminUsername     string
+	BootstrapAdminPassword     string
+	DataDir                    string
 	AccessDefaultTailscaleOnly bool
 }
 
 // Load reads configuration from environment variables with safe local defaults.
 func Load() Config {
-	ttl := 24 * time.Hour
-	if v := os.Getenv("JWT_ACCESS_TTL"); v != "" {
-		if d, err := time.ParseDuration(v); err == nil {
-			ttl = d
+	// Default: non-expiring JWT (demo / long-lived terminal sessions).
+	// Set JWT_ACCESS_TTL=24h (or any Go duration) to enable expiry.
+	// JWT_ACCESS_TTL=0|forever|never → no expiry.
+	ttl := time.Duration(0)
+	if v := strings.TrimSpace(os.Getenv("JWT_ACCESS_TTL")); v != "" {
+		switch strings.ToLower(v) {
+		case "0", "forever", "never", "none", "-1":
+			ttl = 0
+		default:
+			if d, err := time.ParseDuration(v); err == nil {
+				ttl = d
+			}
 		}
 	}
 	dataDir := os.Getenv("DATA_DIR")
