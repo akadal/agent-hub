@@ -16,7 +16,10 @@ export type User = {
   id: string
   username: string
   role: string
+  created_at?: string
 }
+
+export type UserRole = 'admin' | 'user'
 
 export type Machine = {
   id: string
@@ -87,6 +90,135 @@ export async function fetchMe(token: string): Promise<User> {
   })
   if (!res.ok) throw new Error(await parseError(res))
   return (await res.json()) as User
+}
+
+export async function listUsers(token: string): Promise<User[]> {
+  const res = await fetch(`${API_BASE}/api/users`, {
+    headers: authHeaders(token),
+  })
+  if (!res.ok) throw new Error(await parseError(res))
+  const data = (await res.json()) as { users: User[] }
+  return data.users ?? []
+}
+
+export async function createUser(
+  token: string,
+  body: { username: string; password: string; role: UserRole },
+): Promise<User> {
+  const res = await fetch(`${API_BASE}/api/users`, {
+    method: 'POST',
+    headers: authHeaders(token),
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) throw new Error(await parseError(res))
+  return (await res.json()) as User
+}
+
+export async function updateUser(
+  token: string,
+  id: string,
+  body: { password?: string; role?: UserRole },
+): Promise<User> {
+  const res = await fetch(`${API_BASE}/api/users/${id}`, {
+    method: 'PATCH',
+    headers: authHeaders(token),
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) throw new Error(await parseError(res))
+  return (await res.json()) as User
+}
+
+export async function deleteUser(token: string, id: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/users/${id}`, {
+    method: 'DELETE',
+    headers: authHeaders(token),
+  })
+  if (!res.ok && res.status !== 204) throw new Error(await parseError(res))
+}
+
+export type MachineGrant = {
+  user_id: string
+  machine_id: string
+  created_at: string
+}
+
+export type AuditEvent = {
+  id: string
+  at: string
+  user_id?: string
+  username?: string
+  action: string
+  machine_id?: string
+  terminal_id?: string
+  detail?: string
+}
+
+export type AccessSettings = {
+  network_mode: 'private_mesh' | 'open' | string
+}
+
+export async function listGrants(token: string): Promise<MachineGrant[]> {
+  const res = await fetch(`${API_BASE}/api/grants`, {
+    headers: authHeaders(token),
+  })
+  if (!res.ok) throw new Error(await parseError(res))
+  const data = (await res.json()) as { grants: MachineGrant[] }
+  return data.grants ?? []
+}
+
+export async function createGrant(
+  token: string,
+  body: { user_id: string; machine_id: string },
+): Promise<MachineGrant> {
+  const res = await fetch(`${API_BASE}/api/grants`, {
+    method: 'POST',
+    headers: authHeaders(token),
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) throw new Error(await parseError(res))
+  return (await res.json()) as MachineGrant
+}
+
+export async function revokeGrant(
+  token: string,
+  body: { user_id: string; machine_id: string },
+): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/grants`, {
+    method: 'DELETE',
+    headers: authHeaders(token),
+    body: JSON.stringify(body),
+  })
+  if (!res.ok && res.status !== 204) throw new Error(await parseError(res))
+}
+
+export async function listAudit(token: string): Promise<AuditEvent[]> {
+  const res = await fetch(`${API_BASE}/api/audit`, {
+    headers: authHeaders(token),
+  })
+  if (!res.ok) throw new Error(await parseError(res))
+  const data = (await res.json()) as { events: AuditEvent[] }
+  return data.events ?? []
+}
+
+export async function getSettings(token: string): Promise<AccessSettings> {
+  const res = await fetch(`${API_BASE}/api/settings`, {
+    headers: authHeaders(token),
+  })
+  if (!res.ok) throw new Error(await parseError(res))
+  return (await res.json()) as AccessSettings
+}
+
+export async function updateSettings(
+  token: string,
+  body: { network_mode: string },
+): Promise<AccessSettings> {
+  const res = await fetch(`${API_BASE}/api/settings`, {
+    method: 'PATCH',
+    headers: authHeaders(token),
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) throw new Error(await parseError(res))
+  return (await res.json()) as AccessSettings
 }
 
 export async function listMachines(token: string): Promise<Machine[]> {

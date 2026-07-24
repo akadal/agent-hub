@@ -49,9 +49,10 @@ Thin technical sketch. Product truth lives in `docs/prd.md`. Domain language liv
 
 ## 3. Terminal persistence
 
-- Prefer **tmux** on the target machine (or an intermediate runner) for session durability.
-- Browser disconnect should not destroy the shell; reconnect attaches to the same session when possible.
-- Exact remote control channel (SSH + tmux, lightweight agent, etc.) is **TBD** — decide before M3 implementation; record the choice here and any debt in `docs/debt.md`.
+- **Channel:** SSH + PTY (ADR-005). Each Terminal row has a `remote_session` name.
+- **Durability:** remote command prefers `tmux -u new-session -A -s <name>` when `tmux` is on PATH (Homebrew paths included); otherwise a plain login shell.
+- Browser disconnect closes the WebSocket/SSH client only; **tmux keeps the shell**. Reopen/reattach uses the same `remote_session`.
+- Explicit Close in the UI kills the remote tmux session when present.
 
 ---
 
@@ -66,9 +67,16 @@ Thin technical sketch. Product truth lives in `docs/prd.md`. Domain language liv
 
 ## 5. Permission enforcement
 
-- Check user ↔ machine and/or user ↔ terminal grants before open/stream/admin actions.
-- Default-deny if no grant (aligned with `docs/ddd.md`).
-- Emit AuditEvent for security-relevant actions.
+- **Access:** admin (all) · machine owner · explicit `MachineGrant` · legacy machines with empty owner.
+- **Terminals inherit machine access** (no separate terminal grant table in MVP).
+- **Manage (delete machine):** owner or admin only.
+- Default-deny for non-owners without a grant.
+- Audit events on login, machine/terminal lifecycle, exec, grants, settings.
+
+## 5b. Access policy (settings)
+
+- Stored `network_mode`: `private_mesh` (default) or `open`.
+- Records operator intent; actual network edge is reverse-proxy / Tailscale / firewall.
 
 ---
 

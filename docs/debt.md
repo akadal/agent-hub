@@ -16,6 +16,10 @@ Track known shortcuts, accepted risks, and items to revisit. Prefer linking a ba
 |----|------|------|-------------|------|--------|
 | D-001 | 2026-07-23 | FE | v0.1 web shell is shadcn-admin-*aligned* (Vite/React/TS/shadcn layout) not a full vendor copy of satnaing/shadcn-admin demos | Low — patterns match ADR-006; may re-sync primitives as product pages grow | open |
 | D-002 | 2026-07-23 | FE build | Web image uses `npm install` (not `npm ci`) due to optional platform lock drift on linux | Medium — less reproducible installs; revisit lockfile generation | open |
+| D-003 | 2026-07-24 | AuthZ | Terminal ACL inherits machine grants only (no per-terminal grant rows) | Low — enough for v1 sharing; add terminal grants if multi-tenant co-tenancy on one host | open |
+| D-004 | 2026-07-24 | Access | Network policy is stored intent + docs; no in-app IP allowlist | Medium — operators must secure the edge | open |
+| D-005 | 2026-07-24 | Audit | File-backed audit capped at 1000 events; no export/retention jobs | Low — fine for small deployments | open |
+| D-006 | 2026-07-24 | Auth | Tailscale identity login (M1.3) not shipped; machine import only | Low — local JWT remains fallback | open |
 
 ---
 

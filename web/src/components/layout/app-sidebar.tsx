@@ -11,20 +11,33 @@ import {
 } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
+import { useAuth } from '@/lib/auth'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Separator } from '@/components/ui/separator'
 
-const navItems = [
+type NavItem = {
+  to: string
+  label: string
+  icon: typeof LayoutDashboard
+  end?: boolean
+  adminOnly?: boolean
+}
+
+const navItems: NavItem[] = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard, end: true },
   { to: '/workspace', label: 'Workspace', icon: LayoutPanelLeft },
   { to: '/machines', label: 'Machines', icon: Monitor },
-  { to: '/users', label: 'Users', icon: Users },
-  { to: '/permissions', label: 'Permissions', icon: Shield },
-  { to: '/audit', label: 'Audit', icon: ClipboardList },
+  { to: '/users', label: 'Users', icon: Users, adminOnly: true },
+  { to: '/permissions', label: 'Permissions', icon: Shield, adminOnly: true },
+  { to: '/audit', label: 'Audit', icon: ClipboardList, adminOnly: true },
   { to: '/settings', label: 'Settings', icon: Settings },
 ]
 
 export function AppSidebar({ onNavigate }: { onNavigate?: () => void }) {
+  const { user } = useAuth()
+  const isAdmin = user?.role === 'admin'
+  const visible = navItems.filter((item) => !item.adminOnly || isAdmin)
+
   return (
     <div className="flex h-full flex-col bg-sidebar text-sidebar-foreground">
       <div className="flex h-14 items-center gap-2 px-4">
@@ -39,7 +52,7 @@ export function AppSidebar({ onNavigate }: { onNavigate?: () => void }) {
       <Separator className="bg-sidebar-border" />
       <ScrollArea className="flex-1 px-2 py-3">
         <nav className="flex flex-col gap-1">
-          {navItems.map(({ to, label, icon: Icon, end }) => (
+          {visible.map(({ to, label, icon: Icon, end }) => (
             <NavLink
               key={to}
               to={to}

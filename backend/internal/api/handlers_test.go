@@ -51,6 +51,94 @@ func loginToken(t *testing.T, mux http.Handler, user, pass string) string {
 	return resp.Token
 }
 
+func TestGrants_enforceMachineAccess(t *testing.T) {
+	s, mux := testServer(t)
+	adminTok := loginToken(t, mux, "admin", "123456")
+
+	// create alice
+	body, _ := json.Marshal(map[string]string{
+		"username": "alice", "password": "alicepass", "role": "user",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/users", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+adminTok)
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("create user status=%d %s", rr.Code, rr.Body.String())
+	}
+	var alice map[string]any
+	_ = json.Unmarshal(rr.Body.Bytes(), &alice)
+	aliceID, _ := alice["id"].(string)
+
+	// admin creates machine (owned by admin)
+	mbody, _ := json.Marshal(map[string]any{
+		"name": "box", "address": "10.0.0.9", "port": 22,
+		"ssh_user": "root", "ssh_password": "x",
+	})
+	req = httptest.NewRequest(http.MethodPost, "/api/machines", bytes.NewReader(mbody))
+	req.Header.Set("Authorization", "Bearer "+adminTok)
+	req.Header.Set("Content-Type", "application/json")
+	rr = httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("create machine %d %s", rr.Code, rr.Body.String())
+	}
+	var m map[string]any
+	_ = json.Unmarshal(rr.Body.Bytes(), &m)
+	mid, _ := m["id"].(string)
+
+	aliceTok := loginToken(t, mux, "alice", "alicepass")
+
+	// alice cannot see machine yet
+	req = httptest.NewRequest(http.MethodGet, "/api/machines/"+mid, nil)
+	req.Header.Set("Authorization", "Bearer "+aliceTok)
+	rr = httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("want 404 before grant, got %d", rr.Code)
+	}
+
+	// grant
+	gbody, _ := json.Marshal(map[string]string{"user_id": aliceID, "machine_id": mid})
+	req = httptest.NewRequest(http.MethodPost, "/api/grants", bytes.NewReader(gbody))
+	req.Header.Set("Authorization", "Bearer "+adminTok)
+	req.Header.Set("Content-Type", "application/json")
+	rr = httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("grant %d %s", rr.Code, rr.Body.String())
+	}
+
+	// alice can see
+	req = httptest.NewRequest(http.MethodGet, "/api/machines/"+mid, nil)
+	req.Header.Set("Authorization", "Bearer "+aliceTok)
+	rr = httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("want 200 after grant, got %d %s", rr.Code, rr.Body.String())
+	}
+
+	// settings default
+	req = httptest.NewRequest(http.MethodGet, "/api/settings", nil)
+	req.Header.Set("Authorization", "Bearer "+aliceTok)
+	rr = httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("settings %d", rr.Code)
+	}
+
+	// audit is admin-only
+	req = httptest.NewRequest(http.MethodGet, "/api/audit", nil)
+	req.Header.Set("Authorization", "Bearer "+aliceTok)
+	rr = httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("audit want 403 got %d", rr.Code)
+	}
+	_ = s // keep server ref for future assertions
+}
+
 func TestHealth_shippedHandler(t *testing.T) {
 	_, mux := testServer(t)
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
@@ -368,5 +456,230 @@ func TestTailscaleImport_notConfigured(t *testing.T) {
 	mux.ServeHTTP(rr, req)
 	if rr.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status=%d want 503 body=%s", rr.Code, rr.Body.String())
+	}
+}
+
+func assertNoPasswordHash(t *testing.T, m map[string]any) {
+	t.Helper()
+	if _, ok := m["password_hash"]; ok {
+		t.Fatal("password_hash must not be exposed in API response")
+	}
+	if _, ok := m["password"]; ok {
+		t.Fatal("password must not be exposed in API response")
+	}
+}
+
+// TestUsers_adminCRUD_andNewUserLogin exercises the shipped multi-user path:
+// admin create → list → new user login/me → update role/password → delete.
+func TestUsers_adminCRUD_andNewUserLogin(t *testing.T) {
+	_, mux := testServer(t)
+	adminTok := loginToken(t, mux, "admin", "123456")
+
+	// create user
+	body, _ := json.Marshal(map[string]string{
+		"username": "operator",
+		"password": "op-secret",
+		"role":     "user",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/users", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+adminTok)
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("create status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	var created map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	assertNoPasswordHash(t, created)
+	if created["username"] != "operator" || created["role"] != "user" {
+		t.Fatalf("created=%v", created)
+	}
+	userID, _ := created["id"].(string)
+	if userID == "" {
+		t.Fatal("empty user id")
+	}
+
+	// list users (admin)
+	reqL := httptest.NewRequest(http.MethodGet, "/api/users", nil)
+	reqL.Header.Set("Authorization", "Bearer "+adminTok)
+	rrL := httptest.NewRecorder()
+	mux.ServeHTTP(rrL, reqL)
+	if rrL.Code != http.StatusOK {
+		t.Fatalf("list status=%d body=%s", rrL.Code, rrL.Body.String())
+	}
+	var list struct {
+		Users []map[string]any `json:"users"`
+	}
+	if err := json.Unmarshal(rrL.Body.Bytes(), &list); err != nil {
+		t.Fatal(err)
+	}
+	if len(list.Users) < 2 {
+		t.Fatalf("want >=2 users, got %d", len(list.Users))
+	}
+	for _, u := range list.Users {
+		assertNoPasswordHash(t, u)
+	}
+
+	// new user can log in and /me matches stored role
+	opTok := loginToken(t, mux, "operator", "op-secret")
+	reqMe := httptest.NewRequest(http.MethodGet, "/api/me", nil)
+	reqMe.Header.Set("Authorization", "Bearer "+opTok)
+	rrMe := httptest.NewRecorder()
+	mux.ServeHTTP(rrMe, reqMe)
+	if rrMe.Code != http.StatusOK {
+		t.Fatalf("me status=%d body=%s", rrMe.Code, rrMe.Body.String())
+	}
+	var me map[string]string
+	if err := json.Unmarshal(rrMe.Body.Bytes(), &me); err != nil {
+		t.Fatal(err)
+	}
+	if me["username"] != "operator" || me["role"] != "user" || me["id"] != userID {
+		t.Fatalf("me=%v", me)
+	}
+
+	// update password + promote to admin
+	updBody, _ := json.Marshal(map[string]string{
+		"password": "op-rotated",
+		"role":     "admin",
+	})
+	reqU := httptest.NewRequest(http.MethodPatch, "/api/users/"+userID, bytes.NewReader(updBody))
+	reqU.Header.Set("Authorization", "Bearer "+adminTok)
+	reqU.Header.Set("Content-Type", "application/json")
+	rrU := httptest.NewRecorder()
+	mux.ServeHTTP(rrU, reqU)
+	if rrU.Code != http.StatusOK {
+		t.Fatalf("update status=%d body=%s", rrU.Code, rrU.Body.String())
+	}
+	var updated map[string]any
+	if err := json.Unmarshal(rrU.Body.Bytes(), &updated); err != nil {
+		t.Fatal(err)
+	}
+	assertNoPasswordHash(t, updated)
+	if updated["role"] != "admin" {
+		t.Fatalf("role after update=%v", updated["role"])
+	}
+
+	// login with new password; /me role is admin
+	opTok2 := loginToken(t, mux, "operator", "op-rotated")
+	reqMe2 := httptest.NewRequest(http.MethodGet, "/api/me", nil)
+	reqMe2.Header.Set("Authorization", "Bearer "+opTok2)
+	rrMe2 := httptest.NewRecorder()
+	mux.ServeHTTP(rrMe2, reqMe2)
+	var me2 map[string]string
+	_ = json.Unmarshal(rrMe2.Body.Bytes(), &me2)
+	if me2["role"] != "admin" {
+		t.Fatalf("me after promote=%v", me2)
+	}
+
+	// delete the secondary admin
+	reqD := httptest.NewRequest(http.MethodDelete, "/api/users/"+userID, nil)
+	reqD.Header.Set("Authorization", "Bearer "+adminTok)
+	rrD := httptest.NewRecorder()
+	mux.ServeHTTP(rrD, reqD)
+	if rrD.Code != http.StatusNoContent {
+		t.Fatalf("delete status=%d body=%s", rrD.Code, rrD.Body.String())
+	}
+
+	// login as deleted user fails
+	bodyLogin, _ := json.Marshal(map[string]string{"username": "operator", "password": "op-rotated"})
+	reqBad := httptest.NewRequest(http.MethodPost, "/api/auth/login", bytes.NewReader(bodyLogin))
+	reqBad.Header.Set("Content-Type", "application/json")
+	rrBad := httptest.NewRecorder()
+	mux.ServeHTTP(rrBad, reqBad)
+	if rrBad.Code != http.StatusUnauthorized {
+		t.Fatalf("login after delete status=%d", rrBad.Code)
+	}
+}
+
+func TestUsers_nonAdminForbidden(t *testing.T) {
+	s, mux := testServer(t)
+	// seed a regular user via store (admin path creates via API in other test)
+	if _, err := s.Store.CreateUser("regular", "regpass", store.RoleUser); err != nil {
+		t.Fatal(err)
+	}
+	regTok := loginToken(t, mux, "regular", "regpass")
+
+	// list forbidden
+	req := httptest.NewRequest(http.MethodGet, "/api/users", nil)
+	req.Header.Set("Authorization", "Bearer "+regTok)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("list status=%d want 403", rr.Code)
+	}
+
+	// create forbidden
+	body, _ := json.Marshal(map[string]string{"username": "x", "password": "y", "role": "user"})
+	reqC := httptest.NewRequest(http.MethodPost, "/api/users", bytes.NewReader(body))
+	reqC.Header.Set("Authorization", "Bearer "+regTok)
+	reqC.Header.Set("Content-Type", "application/json")
+	rrC := httptest.NewRecorder()
+	mux.ServeHTTP(rrC, reqC)
+	if rrC.Code != http.StatusForbidden {
+		t.Fatalf("create status=%d want 403", rrC.Code)
+	}
+
+	// unauthenticated
+	reqU := httptest.NewRequest(http.MethodGet, "/api/users", nil)
+	rrU := httptest.NewRecorder()
+	mux.ServeHTTP(rrU, reqU)
+	if rrU.Code != http.StatusUnauthorized {
+		t.Fatalf("unauth status=%d want 401", rrU.Code)
+	}
+}
+
+func TestUsers_lastAdminDeleteRejected(t *testing.T) {
+	_, mux := testServer(t)
+	adminTok := loginToken(t, mux, "admin", "123456")
+
+	// find bootstrap admin id via list
+	reqL := httptest.NewRequest(http.MethodGet, "/api/users", nil)
+	reqL.Header.Set("Authorization", "Bearer "+adminTok)
+	rrL := httptest.NewRecorder()
+	mux.ServeHTTP(rrL, reqL)
+	var list struct {
+		Users []map[string]any `json:"users"`
+	}
+	if err := json.Unmarshal(rrL.Body.Bytes(), &list); err != nil {
+		t.Fatal(err)
+	}
+	if len(list.Users) != 1 {
+		t.Fatalf("want only bootstrap admin, got %d", len(list.Users))
+	}
+	id, _ := list.Users[0]["id"].(string)
+
+	reqD := httptest.NewRequest(http.MethodDelete, "/api/users/"+id, nil)
+	reqD.Header.Set("Authorization", "Bearer "+adminTok)
+	rrD := httptest.NewRecorder()
+	mux.ServeHTTP(rrD, reqD)
+	if rrD.Code != http.StatusConflict {
+		t.Fatalf("delete last admin status=%d want 409 body=%s", rrD.Code, rrD.Body.String())
+	}
+
+	// demote last admin also refused
+	updBody, _ := json.Marshal(map[string]string{"role": "user"})
+	reqU := httptest.NewRequest(http.MethodPatch, "/api/users/"+id, bytes.NewReader(updBody))
+	reqU.Header.Set("Authorization", "Bearer "+adminTok)
+	reqU.Header.Set("Content-Type", "application/json")
+	rrU := httptest.NewRecorder()
+	mux.ServeHTTP(rrU, reqU)
+	if rrU.Code != http.StatusConflict {
+		t.Fatalf("demote last admin status=%d want 409 body=%s", rrU.Code, rrU.Body.String())
+	}
+}
+
+// Dual-mount: Coolify may strip /api so /users must work without the prefix.
+func TestUsers_strippedPath(t *testing.T) {
+	_, mux := testServer(t)
+	adminTok := loginToken(t, mux, "admin", "123456")
+	req := httptest.NewRequest(http.MethodGet, "/users", nil)
+	req.Header.Set("Authorization", "Bearer "+adminTok)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("stripped list status=%d body=%s", rr.Code, rr.Body.String())
 	}
 }

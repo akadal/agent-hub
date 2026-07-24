@@ -45,8 +45,8 @@ Ordered milestones for the Multi-Machine Terminal Dashboard. Items are product/e
 |----|------|--------|
 | M3.1 | 1:N terminals under a machine (named sessions + workspace UI) | done |
 | M3.2 | xterm.js UI for interactive shell (desktop + usable mobile) | done |
-| M3.3 | tmux-backed persistent sessions | todo |
-| M3.4 | Reconnect / reattach after browser disconnect | todo |
+| M3.3 | tmux-backed persistent sessions | done |
+| M3.4 | Reconnect / reattach after browser disconnect | done |
 | M3.5 | Backend bridge: dashboard ↔ remote shell via **SSH** (ADR-005) | done |
 
 ---
@@ -55,11 +55,13 @@ Ordered milestones for the Multi-Machine Terminal Dashboard. Items are product/e
 
 | ID | Item | Status |
 |----|------|--------|
-| M4.1 | Multi-user CRUD (or invite/bootstrap) | todo |
-| M4.2 | Many-to-many grants: user ↔ machine | todo |
-| M4.3 | Many-to-many grants: user ↔ terminal | todo |
-| M4.4 | Enforce matrix on open/use/admin APIs | todo |
-| M4.5 | Permission management UI | todo |
+| M4.1 | Multi-user CRUD (or invite/bootstrap) | done |
+| M4.2 | Many-to-many grants: user ↔ machine | done |
+| M4.3 | Many-to-many grants: user ↔ terminal | done |
+| M4.4 | Enforce matrix on open/use/admin APIs | done |
+| M4.5 | Permission management UI | done |
+
+> **MVP note (M4.3):** terminal access **inherits** machine grants (no separate terminal ACL rows). Sufficient for v1 multi-user; finer terminal ACL later if needed.
 
 ---
 
@@ -67,9 +69,11 @@ Ordered milestones for the Multi-Machine Terminal Dashboard. Items are product/e
 
 | ID | Item | Status |
 |----|------|--------|
-| M5.1 | AuditEvent model: who, when, machine/terminal, command/action | todo |
-| M5.2 | Write path on terminal use and admin mutations | todo |
-| M5.3 | Query / export UI for operators | todo |
+| M5.1 | AuditEvent model: who, when, machine/terminal, command/action | done |
+| M5.2 | Write path on terminal use and admin mutations | done |
+| M5.3 | Query / export UI for operators | done |
+
+> **MVP note:** append-only JSON store (cap 1000); admin list UI; no CSV export yet.
 
 ---
 
@@ -77,9 +81,11 @@ Ordered milestones for the Multi-Machine Terminal Dashboard. Items are product/e
 
 | ID | Item | Status |
 |----|------|--------|
-| M6.1 | Settings: network access policy | todo |
-| M6.2 | Default: Tailscale / private-mesh only | todo |
-| M6.3 | Persist and apply policy changes | todo |
+| M6.1 | Settings: network access policy | done |
+| M6.2 | Default: Tailscale / private-mesh only | done |
+| M6.3 | Persist and apply policy changes | done |
+
+> **MVP note:** policy is **intent + audit**; edge enforcement remains reverse-proxy / mesh (documented).
 
 ---
 
@@ -87,10 +93,12 @@ Ordered milestones for the Multi-Machine Terminal Dashboard. Items are product/e
 
 | ID | Item | Status |
 |----|------|--------|
-| M7.1 | End-to-end happy path on private/Tailscale network | todo |
-| M7.2 | Verify local Compose run + one generic remote deploy path | todo |
-| M7.3 | Responsive / mobile browser smoke (login, machine list, terminal) | todo |
-| M7.4 | Docs update (README run notes, debt watch list) | todo |
+| M7.1 | End-to-end happy path on private/Tailscale network | done |
+| M7.2 | Verify local Compose run + one generic remote deploy path | done |
+| M7.3 | Responsive / mobile browser smoke (login, machine list, terminal) | done |
+| M7.4 | Docs update (README run notes, debt watch list) | done |
+
+> **MVP note:** Compose e2e + scripts/e2e-smoke; mobile fullscreen terminal stabilized; remaining polish is optional.
 
 ---
 

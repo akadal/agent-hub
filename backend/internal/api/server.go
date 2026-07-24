@@ -68,6 +68,24 @@ func (s *Server) NewMux() http.Handler {
 	mount("POST", "/auth/login", s.handleLogin)
 	mount("GET", "/me", s.requireAuth(s.handleMe))
 
+	// Admin-only local user management (M4.1)
+	mount("GET", "/users", s.requireAuth(s.requireAdmin(s.handleListUsers)))
+	mount("POST", "/users", s.requireAuth(s.requireAdmin(s.handleCreateUser)))
+	mount("PATCH", "/users/{id}", s.requireAuth(s.requireAdmin(s.handleUpdateUser)))
+	mount("DELETE", "/users/{id}", s.requireAuth(s.requireAdmin(s.handleDeleteUser)))
+
+	// Permissions: user ↔ machine grants (terminals inherit machine access)
+	mount("GET", "/grants", s.requireAuth(s.requireAdmin(s.handleListGrants)))
+	mount("POST", "/grants", s.requireAuth(s.requireAdmin(s.handleCreateGrant)))
+	mount("DELETE", "/grants", s.requireAuth(s.requireAdmin(s.handleDeleteGrant)))
+
+	// Audit (admin list; writes happen on security-relevant actions)
+	mount("GET", "/audit", s.requireAuth(s.requireAdmin(s.handleListAudit)))
+
+	// Access policy settings
+	mount("GET", "/settings", s.requireAuth(s.handleGetSettings))
+	mount("PATCH", "/settings", s.requireAuth(s.requireAdmin(s.handlePatchSettings)))
+
 	mount("GET", "/machines", s.requireAuth(s.handleListMachines))
 	mount("POST", "/machines", s.requireAuth(s.handleCreateMachine))
 	// Tailscale import — register before /machines/{id} is fine; patterns are distinct.
@@ -157,6 +175,11 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	u, err := s.Store.Authenticate(req.Username, req.Password)
 	if err != nil {
 		if errors.Is(err, store.ErrInvalidCreds) {
+			_ = s.Store.AppendAudit(store.AuditEvent{
+				Username: req.Username,
+				Action:   "login.failed",
+				Detail:   "invalid credentials",
+			})
 			writeErr(w, http.StatusUnauthorized, "invalid username or password")
 			return
 		}
@@ -168,6 +191,11 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "token issue failed")
 		return
 	}
+	_ = s.Store.AppendAudit(store.AuditEvent{
+		UserID:   u.ID,
+		Username: u.Username,
+		Action:   "login.ok",
+	})
 	var expPtr *time.Time
 	if !exp.IsZero() {
 		expPtr = &exp
@@ -182,6 +210,99 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	c := claimsFrom(r.Context())
 	writeJSON(w, http.StatusOK, userView{ID: c.UserID, Username: c.Username, Role: c.Role})
+}
+
+type createUserRequest struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+	Role     string `json:"role"` // admin | user (default user)
+}
+
+type updateUserRequest struct {
+	Password string `json:"password"` // optional; empty = unchanged
+	Role     string `json:"role"`     // optional; empty = unchanged
+}
+
+type userListResponse struct {
+	Users []store.UserPublic `json:"users"`
+}
+
+func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request) {
+	users := s.Store.ListUsers()
+	out := make([]store.UserPublic, 0, len(users))
+	for _, u := range users {
+		out = append(out, u.Public())
+	}
+	writeJSON(w, http.StatusOK, userListResponse{Users: out})
+}
+
+func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
+	var req createUserRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	u, err := s.Store.CreateUser(req.Username, req.Password, req.Role)
+	if err != nil {
+		switch {
+		case errors.Is(err, store.ErrUserExists):
+			writeErr(w, http.StatusConflict, "username already exists")
+		case errors.Is(err, store.ErrInvalidRole):
+			writeErr(w, http.StatusBadRequest, "role must be admin or user")
+		default:
+			if strings.Contains(err.Error(), "required") {
+				writeErr(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			writeErr(w, http.StatusInternalServerError, "create user failed")
+		}
+		return
+	}
+	writeJSON(w, http.StatusCreated, u.Public())
+}
+
+func (s *Server) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var req updateUserRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	if req.Password == "" && req.Role == "" {
+		writeErr(w, http.StatusBadRequest, "password or role required")
+		return
+	}
+	u, err := s.Store.UpdateUser(id, req.Password, req.Role)
+	if err != nil {
+		switch {
+		case errors.Is(err, store.ErrNotFound):
+			writeErr(w, http.StatusNotFound, "user not found")
+		case errors.Is(err, store.ErrLastAdmin):
+			writeErr(w, http.StatusConflict, "cannot demote the last admin")
+		case errors.Is(err, store.ErrInvalidRole):
+			writeErr(w, http.StatusBadRequest, "role must be admin or user")
+		default:
+			writeErr(w, http.StatusInternalServerError, "update user failed")
+		}
+		return
+	}
+	writeJSON(w, http.StatusOK, u.Public())
+}
+
+func (s *Server) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if err := s.Store.DeleteUser(id); err != nil {
+		switch {
+		case errors.Is(err, store.ErrNotFound):
+			writeErr(w, http.StatusNotFound, "user not found")
+		case errors.Is(err, store.ErrLastAdmin):
+			writeErr(w, http.StatusConflict, "cannot delete the last admin")
+		default:
+			writeErr(w, http.StatusInternalServerError, "delete user failed")
+		}
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 type createMachineRequest struct {
@@ -204,6 +325,7 @@ func (s *Server) handleCreateMachine(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	s.audit(r, "machine.create", m.ID, "", m.Name+" @ "+m.Address)
 	writeJSON(w, http.StatusCreated, m.Public())
 }
 
@@ -338,7 +460,7 @@ func (s *Server) handleTailscaleImport(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleListMachines(w http.ResponseWriter, r *http.Request) {
 	c := claimsFrom(r.Context())
-	list := s.Store.ListMachines(c.UserID)
+	list := s.Store.ListMachinesForUser(c.UserID, c.Role)
 	out := make([]store.MachinePublic, 0, len(list))
 	for _, m := range list {
 		out = append(out, m.Public())
@@ -367,14 +489,15 @@ func (s *Server) handleDeleteMachine(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "machine not found")
 		return
 	}
-	if !s.canAccessMachine(r, m) {
-		writeErr(w, http.StatusNotFound, "machine not found")
+	if !s.canManageMachine(r, m) {
+		writeErr(w, http.StatusForbidden, "not allowed to delete this machine")
 		return
 	}
 	if err := s.Store.DeleteMachine(id); err != nil {
 		writeErr(w, http.StatusNotFound, "machine not found")
 		return
 	}
+	s.audit(r, "machine.delete", id, "", m.Name)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -389,7 +512,11 @@ func (s *Server) handleMachineExec(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "machine not found")
 		return
 	}
-	s.runExec(w, r, m)
+	if !s.canAccessMachine(r, m) {
+		writeErr(w, http.StatusNotFound, "machine not found")
+		return
+	}
+	s.runExec(w, r, m, id, "")
 }
 
 func (s *Server) handleTerminalExec(w http.ResponseWriter, r *http.Request) {
@@ -404,11 +531,15 @@ func (s *Server) handleTerminalExec(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "machine not found")
 		return
 	}
+	if !s.canAccessMachine(r, m) {
+		writeErr(w, http.StatusNotFound, "terminal session not found")
+		return
+	}
 	_ = s.Store.TouchTerminal(id)
-	s.runExec(w, r, m)
+	s.runExec(w, r, m, t.MachineID, id)
 }
 
-func (s *Server) runExec(w http.ResponseWriter, r *http.Request, m store.Machine) {
+func (s *Server) runExec(w http.ResponseWriter, r *http.Request, m store.Machine, machineID, terminalID string) {
 	var req execRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.Command) == "" {
 		writeErr(w, http.StatusBadRequest, "command is required")
@@ -424,6 +555,12 @@ func (s *Server) runExec(w http.ResponseWriter, r *http.Request, m store.Machine
 		writeErr(w, http.StatusBadGateway, "ssh exec failed: "+err.Error())
 		return
 	}
+	// Log action only (not full command payload — keep audit lean/MVP).
+	cmd := strings.TrimSpace(req.Command)
+	if len(cmd) > 120 {
+		cmd = cmd[:120] + "…"
+	}
+	s.audit(r, "exec", machineID, terminalID, cmd)
 	writeJSON(w, http.StatusOK, res)
 }
 
@@ -463,11 +600,21 @@ func (s *Server) handleCreateTerminal(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	s.audit(r, "terminal.create", machineID, t.ID, t.Name)
 	writeJSON(w, http.StatusCreated, t)
 }
 
 func (s *Server) handleListTerminals(w http.ResponseWriter, r *http.Request) {
 	machineID := r.PathValue("id")
+	m, err := s.Store.GetMachine(machineID)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "machine not found")
+		return
+	}
+	if !s.canAccessMachine(r, m) {
+		writeErr(w, http.StatusNotFound, "machine not found")
+		return
+	}
 	list, err := s.Store.ListTerminalsByMachine(machineID)
 	if err != nil {
 		writeErr(w, http.StatusNotFound, "machine not found")
@@ -477,13 +624,30 @@ func (s *Server) handleListTerminals(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleListAllTerminals(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"terminals": s.Store.ListTerminals()})
+	c := claimsFrom(r.Context())
+	all := s.Store.ListTerminals()
+	out := make([]store.Terminal, 0, len(all))
+	for _, t := range all {
+		m, err := s.Store.GetMachine(t.MachineID)
+		if err != nil {
+			continue
+		}
+		if s.Store.UserCanAccessMachine(c.UserID, c.Role, m) {
+			out = append(out, t)
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"terminals": out})
 }
 
 func (s *Server) handleGetTerminal(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	t, err := s.Store.GetTerminal(id)
 	if err != nil {
+		writeErr(w, http.StatusNotFound, "terminal session not found")
+		return
+	}
+	m, err := s.Store.GetMachine(t.MachineID)
+	if err != nil || !s.canAccessMachine(r, m) {
 		writeErr(w, http.StatusNotFound, "terminal session not found")
 		return
 	}
@@ -496,6 +660,15 @@ type patchTerminalRequest struct {
 
 func (s *Server) handlePatchTerminal(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	existing, err := s.Store.GetTerminal(id)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "terminal session not found")
+		return
+	}
+	if m, err := s.Store.GetMachine(existing.MachineID); err != nil || !s.canAccessMachine(r, m) {
+		writeErr(w, http.StatusNotFound, "terminal session not found")
+		return
+	}
 	var req patchTerminalRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid json body")
@@ -520,18 +693,22 @@ func (s *Server) handleCloseTerminal(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "terminal session not found")
 		return
 	}
-	if m, err := s.Store.GetMachine(t.MachineID); err == nil {
-		_ = sshterm.KillRemoteSession(sshterm.Target{
-			Address:  m.Address,
-			Port:     m.Port,
-			User:     m.SSHUser,
-			Password: m.SSHPassword,
-		}, t.RemoteSession)
+	m, err := s.Store.GetMachine(t.MachineID)
+	if err != nil || !s.canAccessMachine(r, m) {
+		writeErr(w, http.StatusNotFound, "terminal session not found")
+		return
 	}
+	_ = sshterm.KillRemoteSession(sshterm.Target{
+		Address:  m.Address,
+		Port:     m.Port,
+		User:     m.SSHUser,
+		Password: m.SSHPassword,
+	}, t.RemoteSession)
 	if err := s.Store.CloseTerminal(id); err != nil {
 		writeErr(w, http.StatusNotFound, "terminal session not found")
 		return
 	}
+	s.audit(r, "terminal.close", t.MachineID, id, t.Name)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -549,7 +726,8 @@ type wsServerMsg struct {
 }
 
 func (s *Server) handleTerminalWS(w http.ResponseWriter, r *http.Request) {
-	if !s.authorizeWS(w, r) {
+	r, ok := s.authorizeWS(w, r)
+	if !ok {
 		return
 	}
 	id := r.PathValue("id")
@@ -563,13 +741,19 @@ func (s *Server) handleTerminalWS(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "machine not found")
 		return
 	}
+	if !s.canAccessMachine(r, m) {
+		writeErr(w, http.StatusForbidden, "access denied")
+		return
+	}
 	_ = s.Store.TouchTerminal(id)
+	s.audit(r, "terminal.attach", t.MachineID, id, t.Name)
 	// Durable tmux name so mobile/web reconnect attaches to the same shell.
 	s.bridgeSSH(w, r, m, t.RemoteSession, "session "+t.Name)
 }
 
 func (s *Server) handleMachineTerminalWS(w http.ResponseWriter, r *http.Request) {
-	if !s.authorizeWS(w, r) {
+	r, ok := s.authorizeWS(w, r)
+	if !ok {
 		return
 	}
 	id := r.PathValue("id")
@@ -578,6 +762,11 @@ func (s *Server) handleMachineTerminalWS(w http.ResponseWriter, r *http.Request)
 		writeErr(w, http.StatusNotFound, "machine not found")
 		return
 	}
+	if !s.canAccessMachine(r, m) {
+		writeErr(w, http.StatusForbidden, "access denied")
+		return
+	}
+	s.audit(r, "terminal.attach", m.ID, "", "ephemeral")
 	s.bridgeSSH(w, r, m, "", "ephemeral")
 }
 
@@ -586,27 +775,127 @@ func (s *Server) canAccessMachine(r *http.Request, m store.Machine) bool {
 	if c == nil {
 		return false
 	}
-	// Legacy rows without owner are visible to any authenticated user.
-	if m.OwnerUserID == "" {
-		return true
-	}
-	return m.OwnerUserID == c.UserID || c.Role == "admin"
+	return s.Store.UserCanAccessMachine(c.UserID, c.Role, m)
 }
 
-func (s *Server) authorizeWS(w http.ResponseWriter, r *http.Request) bool {
+func (s *Server) canManageMachine(r *http.Request, m store.Machine) bool {
+	c := claimsFrom(r.Context())
+	if c == nil {
+		return false
+	}
+	return s.Store.UserCanManageMachine(c.UserID, c.Role, m)
+}
+
+// authorizeWS validates JWT (header or ?token=) and attaches claims to the request.
+func (s *Server) authorizeWS(w http.ResponseWriter, r *http.Request) (*http.Request, bool) {
 	token := bearerToken(r)
 	if token == "" {
 		token = r.URL.Query().Get("token")
 	}
 	if token == "" {
 		writeErr(w, http.StatusUnauthorized, "missing token")
-		return false
+		return r, false
 	}
-	if _, err := s.Tokens.Parse(token); err != nil {
+	claims, err := s.Tokens.Parse(token)
+	if err != nil {
 		writeErr(w, http.StatusUnauthorized, "invalid token")
-		return false
+		return r, false
 	}
-	return true
+	ctx := context.WithValue(r.Context(), claimsKey, claims)
+	return r.WithContext(ctx), true
+}
+
+func (s *Server) audit(r *http.Request, action, machineID, terminalID, detail string) {
+	c := claimsFrom(r.Context())
+	e := store.AuditEvent{
+		Action:     action,
+		MachineID:  machineID,
+		TerminalID: terminalID,
+		Detail:     detail,
+	}
+	if c != nil {
+		e.UserID = c.UserID
+		e.Username = c.Username
+	}
+	_ = s.Store.AppendAudit(e)
+}
+
+type grantRequest struct {
+	UserID    string `json:"user_id"`
+	MachineID string `json:"machine_id"`
+}
+
+func (s *Server) handleListGrants(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"grants": s.Store.ListGrants()})
+}
+
+func (s *Server) handleCreateGrant(w http.ResponseWriter, r *http.Request) {
+	var req grantRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	if strings.TrimSpace(req.UserID) == "" || strings.TrimSpace(req.MachineID) == "" {
+		writeErr(w, http.StatusBadRequest, "user_id and machine_id required")
+		return
+	}
+	g, err := s.Store.GrantMachineAccess(req.UserID, req.MachineID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeErr(w, http.StatusNotFound, "user or machine not found")
+			return
+		}
+		writeErr(w, http.StatusInternalServerError, "grant failed")
+		return
+	}
+	s.audit(r, "grant.add", req.MachineID, "", "user="+req.UserID)
+	writeJSON(w, http.StatusCreated, g)
+}
+
+func (s *Server) handleDeleteGrant(w http.ResponseWriter, r *http.Request) {
+	var req grantRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		// Also accept query params for simple clients.
+		req.UserID = r.URL.Query().Get("user_id")
+		req.MachineID = r.URL.Query().Get("machine_id")
+	}
+	if strings.TrimSpace(req.UserID) == "" || strings.TrimSpace(req.MachineID) == "" {
+		writeErr(w, http.StatusBadRequest, "user_id and machine_id required")
+		return
+	}
+	if err := s.Store.RevokeMachineAccess(req.UserID, req.MachineID); err != nil {
+		writeErr(w, http.StatusInternalServerError, "revoke failed")
+		return
+	}
+	s.audit(r, "grant.revoke", req.MachineID, "", "user="+req.UserID)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleListAudit(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"events": s.Store.ListAudit(200)})
+}
+
+func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, s.Store.GetSettings())
+}
+
+type patchSettingsRequest struct {
+	NetworkMode string `json:"network_mode"`
+}
+
+func (s *Server) handlePatchSettings(w http.ResponseWriter, r *http.Request) {
+	var req patchSettingsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	st, err := s.Store.UpdateSettings(req.NetworkMode)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	s.audit(r, "settings.update", "", "", "network_mode="+st.NetworkMode)
+	writeJSON(w, http.StatusOK, st)
 }
 
 func (s *Server) bridgeSSH(w http.ResponseWriter, r *http.Request, m store.Machine, remoteSession, label string) {
@@ -709,6 +998,18 @@ func (s *Server) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 		}
 		ctx := context.WithValue(r.Context(), claimsKey, claims)
 		next(w, r.WithContext(ctx))
+	}
+}
+
+// requireAdmin must be nested inside requireAuth so claims are present.
+func (s *Server) requireAdmin(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		c := claimsFrom(r.Context())
+		if c == nil || c.Role != store.RoleAdmin {
+			writeErr(w, http.StatusForbidden, "admin required")
+			return
+		}
+		next(w, r)
 	}
 }
 

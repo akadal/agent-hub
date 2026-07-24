@@ -8,8 +8,26 @@ type User struct {
 	ID           string    `json:"id"`
 	Username     string    `json:"username"`
 	PasswordHash string    `json:"password_hash"`
-	Role         string    `json:"role"`
+	Role         string    `json:"role"` // "admin" | "user"
 	CreatedAt    time.Time `json:"created_at"`
+}
+
+// UserPublic is the API-safe view of a user (no password hash).
+type UserPublic struct {
+	ID        string    `json:"id"`
+	Username  string    `json:"username"`
+	Role      string    `json:"role"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// Public returns an API-safe user without secrets.
+func (u User) Public() UserPublic {
+	return UserPublic{
+		ID:        u.ID,
+		Username:  u.Username,
+		Role:      u.Role,
+		CreatedAt: u.CreatedAt,
+	}
 }
 
 // Machine is a manually registered remote host reachable over SSH by address.
@@ -60,4 +78,41 @@ type Terminal struct {
 	RemoteSession string    `json:"remote_session"`
 	CreatedAt     time.Time `json:"created_at"`
 	UpdatedAt     time.Time `json:"updated_at"`
+}
+
+// MachineGrant is a many-to-many allow: user may use a machine (and its terminals).
+// Owner and admin always have access without a grant row.
+type MachineGrant struct {
+	UserID    string    `json:"user_id"`
+	MachineID string    `json:"machine_id"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// AuditEvent is an append-only security-relevant action record (MVP).
+type AuditEvent struct {
+	ID         string    `json:"id"`
+	At         time.Time `json:"at"`
+	UserID     string    `json:"user_id,omitempty"`
+	Username   string    `json:"username,omitempty"`
+	Action     string    `json:"action"`
+	MachineID  string    `json:"machine_id,omitempty"`
+	TerminalID string    `json:"terminal_id,omitempty"`
+	Detail     string    `json:"detail,omitempty"`
+}
+
+// Network mode values for AccessSettings.
+const (
+	NetworkPrivateMesh = "private_mesh"
+	NetworkOpen        = "open"
+)
+
+// AccessSettings is the global access-policy singleton (MVP).
+// Edge enforcement is operator reverse-proxy / mesh; this records intent.
+type AccessSettings struct {
+	NetworkMode string `json:"network_mode"` // private_mesh | open
+}
+
+// DefaultAccessSettings is the product default (private mesh).
+func DefaultAccessSettings() AccessSettings {
+	return AccessSettings{NetworkMode: NetworkPrivateMesh}
 }
