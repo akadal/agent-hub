@@ -31,7 +31,7 @@ func main() {
 
 	addr := cfg.HTTPAddr
 	if addr == "" {
-		addr = ":8080"
+		addr = ":27341"
 	}
 	log.Printf("agent-hub api listening on %s (data=%s)", addr, cfg.DataDir)
 	if err := http.ListenAndServe(addr, srv.NewMux()); err != nil {

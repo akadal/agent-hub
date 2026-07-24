@@ -53,9 +53,9 @@ docker compose up --build
 
 | Service | URL |
 |---------|-----|
-| Web UI | http://localhost:5173 |
-| API | http://localhost:8080 |
-| Demo SSH host | `localhost:2222` (`root` / `targetpass`) |
+| Web UI | http://localhost:27342 |
+| API | http://localhost:27341 |
+| Demo SSH host | `localhost:27343` (`root` / `targetpass`) |
 
 **Demo login** (seeded only if missing — set via env for your own instance):
 
@@ -110,7 +110,8 @@ Copy [`.env.example`](.env.example). Important variables:
 | `JWT_ACCESS_TTL` | `forever` (default) or Go duration (`24h`); no login re-auth when forever |
 | `BOOTSTRAP_ADMIN_USERNAME` / `_PASSWORD` | First admin (created if missing) |
 | `DATA_DIR` | Persistent store directory (Compose volume `/data`) |
-| `VITE_API_BASE_URL` | Browser-facing API origin (default `http://localhost:8080`) |
+| `VITE_API_BASE_URL` | Browser-facing API origin (default `http://localhost:27341`) |
+| `API_PORT` / `WEB_PORT` / `SSH_TARGET_PORT` | Host publish ports (defaults `27341` / `27342` / `27343`) |
 | `ACCESS_DEFAULT_TAILSCALE_ONLY` | Network policy default; `false` for open local demos |
 
 ---
@@ -121,7 +122,7 @@ Copy [`.env.example`](.env.example). Important variables:
 # API
 cd backend && go run ./cmd/agent-hub
 
-# Web (proxies /api and /health to :8080)
+# Web (proxies /api and /health to :27341)
 cd web && npm install && npm run dev
 
 # Tests

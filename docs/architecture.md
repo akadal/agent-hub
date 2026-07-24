@@ -26,9 +26,9 @@ Thin technical sketch. Product truth lives in `docs/prd.md`. Domain language liv
 
 | Piece | Path / port | Notes |
 |-------|-------------|--------|
-| **API** | `backend/` · `http://localhost:8080` | JWT login, machines CRUD, `POST …/exec`, WS terminal |
-| **Web UI** | `web/` · `http://localhost:5173` | Login, machines, xterm.js terminal (ADR-006) |
-| **Dummy SSH** | `deploy/ssh-target` · host `2222` | Compose service `ssh-target` (`root`/`targetpass`) |
+| **API** | `backend/` · `http://localhost:27341` | JWT login, machines CRUD, `POST …/exec`, WS terminal |
+| **Web UI** | `web/` · `http://localhost:27342` | Login, machines, xterm.js terminal (ADR-006) |
+| **Dummy SSH** | `deploy/ssh-target` · host/container `27343` | Compose service `ssh-target` (`root`/`targetpass`) |
 | **Compose** | `docker-compose.yml` | `api` + `web` + `ssh-target` |
 | **Remote channel** | ADR-005 | **SSH by IP/hostname** — Tailscale not required |
 

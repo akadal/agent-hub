@@ -10,7 +10,7 @@ import (
 )
 
 // Integration test against a real SSH target (Compose dummy).
-// Enabled when SSH_E2E_ADDR is set (e.g. 127.0.0.1 with port 2222).
+// Enabled when SSH_E2E_ADDR is set (e.g. 127.0.0.1 with port 27343).
 func TestRunCommand_liveSSH(t *testing.T) {
 	addr := os.Getenv("SSH_E2E_ADDR")
 	if addr == "" {

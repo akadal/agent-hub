@@ -16,7 +16,8 @@ RUN apk add --no-cache ca-certificates wget \
 USER app
 WORKDIR /app
 COPY --from=build /out/agent-hub /app/agent-hub
-ENV HTTP_ADDR=:8080
+# Uncommon default to avoid Coolify / multi-app host port clashes
+ENV HTTP_ADDR=:27341
 ENV DATA_DIR=/data
-EXPOSE 8080
+EXPOSE 27341
 ENTRYPOINT ["/app/agent-hub"]

@@ -2,11 +2,12 @@
 # End-to-end smoke: login → one machine → multi-session → exec per session.
 set -euo pipefail
 
-API="${API_BASE:-http://localhost:8080}"
+API="${API_BASE:-http://localhost:27341}"
+FE="${FE_BASE:-http://localhost:27342}"
 USER="${E2E_USER:-admin}"
 PASS="${E2E_PASS:-123456}"
 SSH_ADDR="${E2E_SSH_ADDR:-ssh-target}"
-SSH_PORT="${E2E_SSH_PORT:-22}"
+SSH_PORT="${E2E_SSH_PORT:-27343}"
 SSH_USER="${E2E_SSH_USER:-root}"
 SSH_PASS="${E2E_SSH_PASSWORD:-targetpass}"
 MARKER="agent-hub-e2e"
@@ -100,7 +101,7 @@ LIST2=$(curl -sfS "$API/api/machines/$MID/terminals" -H "Authorization: Bearer $
 echo "$LIST2" | python3 -c 'import sys,json; ts=json.load(sys.stdin)["terminals"]; assert len(ts)==1 and ts[0]["id"]=="'"$TID2"'"'
 
 echo "== FE shell =="
-FE="${FE_BASE:-http://localhost:5173}"
+FE="${FE_BASE:-http://localhost:27342}"
 curl -sfS -o /dev/null -w "FE HTTP %{http_code}\n" "$FE/"
 curl -sfS -o /dev/null -w "workspace HTTP %{http_code}\n" "$FE/workspace" || true
 # SPA serves index for all routes

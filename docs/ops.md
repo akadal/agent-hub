@@ -29,33 +29,35 @@ No specific PaaS or control panel is required. Coolify, Traefik, Caddy, nginx, c
 1. Clone the repository.
 2. Optional: `cp .env.example .env` — bootstrap admin defaults to **admin / 123456** (change in real deploys).
 3. From repo root: `docker compose up --build`
-4. Open **http://localhost:5173** → sign in with bootstrap admin.
+4. Open **http://localhost:27342** → sign in with bootstrap admin.
 5. Register a machine:
    - **Address:** `ssh-target` (Compose DNS; API reaches dummy SSH on the same network)
-   - **Port:** `22`
+   - **Port:** `27343`
    - **SSH user / password:** `root` / `targetpass`
-6. Use **Probe SSH** or **Open terminal** (xterm.js over WebSocket).
+6. Use **Workspace** → new sessions (xterm.js over WebSocket).
 
-| Service | Compose name | Host port | Notes |
-|---------|--------------|-----------|--------|
-| API | `api` | **8080** | JWT auth; machines; SSH exec + WS terminal |
-| Web | `web` | **5173** → 80 | SPA; login + machines + terminal |
-| Dummy SSH | `ssh-target` | **2222** → 22 | e2e target only (`root`/`targetpass`) |
+| Service | Compose name | Host / container port | Notes |
+|---------|--------------|------------------------|--------|
+| API | `api` | **27341** | JWT auth; machines; SSH exec + WS terminal |
+| Web | `web` | **27342** | SPA; login + workspace |
+| Dummy SSH | `ssh-target` | **27343** | e2e target only (`root`/`targetpass`) |
+
+Defaults avoid common Coolify clashes on 8080 / 5173 / 22. Override with `API_PORT` / `WEB_PORT` / `SSH_TARGET_PORT`.
 
 **Remote channel:** SSH to registered IP/hostname. **Tailscale is not required** for this path (optional mesh later).
 
 Automated smoke:
 
 ```bash
-./scripts/e2e-smoke.sh
+API_BASE=http://localhost:27341 FE_BASE=http://localhost:27342 E2E_SSH_PORT=27343 ./scripts/e2e-smoke.sh
 ```
 
 Local dev without Compose:
 
 ```bash
 cd backend && go run ./cmd/agent-hub
-cd web && npm install && npm run dev   # proxies /api and /health to :8080
-# Point a machine at a real SSH host or map ssh-target via host port 2222
+cd web && npm install && npm run dev   # proxies /api and /health to :27341
+# Point a machine at a real SSH host or map ssh-target via host port 27343
 ```
 
 ---

@@ -53,7 +53,7 @@ func Load() Config {
 	}
 	addr := os.Getenv("HTTP_ADDR")
 	if addr == "" {
-		addr = ":8080"
+		addr = ":27341"
 	}
 	tailscaleOnly := false
 	if v := os.Getenv("ACCESS_DEFAULT_TAILSCALE_ONLY"); v != "" {

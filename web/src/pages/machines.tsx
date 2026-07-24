@@ -19,7 +19,7 @@ export function MachinesPage() {
   const [loading, setLoading] = useState(true)
   const [name, setName] = useState('ssh-dummy')
   const [address, setAddress] = useState('ssh-target')
-  const [port, setPort] = useState(22)
+  const [port, setPort] = useState(27343)
   const [sshUser, setSshUser] = useState('root')
   const [sshPassword, setSshPassword] = useState('targetpass')
   const [busy, setBusy] = useState(false)
@@ -139,8 +139,8 @@ export function MachinesPage() {
         {machines.length === 0 && !loading ? (
           <p className="p-4 text-sm text-muted-foreground">
             No machines yet. For Compose demo use address{' '}
-            <code>ssh-target</code>, user <code>root</code>, password{' '}
-            <code>targetpass</code>.
+            <code>ssh-target</code>, port <code>27343</code>, user{' '}
+            <code>root</code>, password <code>targetpass</code>.
           </p>
         ) : (
           <ul className="divide-y divide-border">

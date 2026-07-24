@@ -13,14 +13,14 @@ export default defineConfig({
   },
   server: {
     host: true,
-    port: 5173,
+    port: 27342,
     proxy: {
       '/api': {
-        target: process.env.VITE_API_PROXY || 'http://localhost:8080',
+        target: process.env.VITE_API_PROXY || 'http://localhost:27341',
         changeOrigin: true,
       },
       '/health': {
-        target: process.env.VITE_API_PROXY || 'http://localhost:8080',
+        target: process.env.VITE_API_PROXY || 'http://localhost:27341',
         changeOrigin: true,
       },
     },

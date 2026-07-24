@@ -3,11 +3,11 @@
 #   cp .env.example .env
 #   docker compose up --build
 #
-# Endpoints (host):
-#   API:  http://localhost:8080
-#   Web:  http://localhost:5173
-#   Dummy SSH target: localhost:2222 (user root / pass targetpass)
-#   From API container, register address "ssh-target" port 22.
+# Endpoints (host) — uncommon defaults to avoid Coolify/shared-host clashes:
+#   API:  http://localhost:27341
+#   Web:  http://localhost:27342
+#   Dummy SSH target: localhost:27343 (user root / pass targetpass)
+#   From API container, register address "ssh-target" port 27343.
 #
 # Login (bootstrap): admin / 123456  (override via BOOTSTRAP_ADMIN_*)
 
@@ -18,9 +18,9 @@ services:
       dockerfile: Dockerfile
     container_name: agent-hub-api
     ports:
-      - "${API_PORT:-8080}:8080"
+      - "${API_PORT:-27341}:27341"
     environment:
-      HTTP_ADDR: ":8080"
+      HTTP_ADDR: ":27341"
       APP_ENV: ${APP_ENV:-development}
       JWT_SECRET: ${JWT_SECRET:-dev-only-change-me-agent-hub}
       # forever | 0 | never | or Go duration e.g. 24h
@@ -32,7 +32,7 @@ services:
     volumes:
       - api-data:/data
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/health"]
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:27341/health"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -47,23 +47,23 @@ services:
       context: ./web
       dockerfile: Dockerfile
       args:
-        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8080}
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:27341}
     container_name: agent-hub-web
     ports:
-      - "${WEB_PORT:-5173}:80"
+      - "${WEB_PORT:-27342}:27342"
     depends_on:
       api:
         condition: service_healthy
     restart: unless-stopped
 
-  # Dummy remote host for e2e: register as address=ssh-target, port=22
+  # Dummy remote host for e2e: register as address=ssh-target, port=27343
   ssh-target:
     build:
       context: ./deploy/ssh-target
       dockerfile: Dockerfile
     container_name: agent-hub-ssh-target
     ports:
-      - "${SSH_TARGET_PORT:-2222}:22"
+      - "${SSH_TARGET_PORT:-27343}:27343"
     restart: unless-stopped
 
 volumes:
