@@ -32,8 +32,11 @@ import {
 } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import {
-  appendStreamChunk,
-  type StreamBlock,
+  createStreamFeed,
+  feedAddUser,
+  feedPush,
+  feedSnapshot,
+  type StreamFeed,
 } from '@/lib/stream-blocks'
 import {
   getTerminalViewMode,
@@ -729,20 +732,26 @@ function SessionTerminal({
   viewModeRef.current = viewMode
 
   /**
-   * Chronological chat timeline:
-   * - stream segments hold blocks parsed from a raw slice between user turns
-   * - user turns insert between segments so history reads top→bottom
+   * Incremental stream feed lives in a ref (cheap). React state only holds a
+   * generation counter so we can throttle UI updates — and only while chat
+   * mode is visible. Classic mode never pays setState for PTY volume.
    */
-  type TimelineEntry =
-    | { type: 'stream'; id: string; raw: string; blocks: StreamBlock[] }
-    | { type: 'user'; id: string; text: string }
-
-  const [timeline, setTimeline] = useState<TimelineEntry[]>([
-    { type: 'stream', id: 'stream-0', raw: '', blocks: [] },
-  ])
+  const feedRef = useRef<StreamFeed | null>(null)
+  if (!feedRef.current) feedRef.current = createStreamFeed()
+  const feedRafRef = useRef(0)
+  const [feedGen, setFeedGen] = useState(0)
   const [liveStatus, setLiveStatus] = useState('idle')
-  const userTurnSeq = useRef(0)
-  const streamSegSeq = useRef(0)
+
+  const scheduleFeedUi = useCallback(() => {
+    if (viewModeRef.current !== 'chat') return
+    if (feedRafRef.current) return
+    // Coalesce many WS frames into one paint (~1/frame).
+    feedRafRef.current = window.setTimeout(() => {
+      feedRafRef.current = 0
+      const g = feedRef.current?.gen ?? 0
+      setFeedGen((prev) => (prev === g ? prev : g))
+    }, 50)
+  }, [])
 
   const setStatus = useCallback((s: string) => {
     statusRef.current = s
@@ -750,42 +759,16 @@ function SessionTerminal({
     onStatusRef.current(s)
   }, [])
 
-  /** Mirror PTY text into the latest stream segment (presentation only). */
-  const pushStreamText = useCallback((chunk: string) => {
-    setTimeline((prev) => {
-      if (prev.length === 0) {
-        const parsed = appendStreamChunk('', chunk)
-        return [
-          {
-            type: 'stream',
-            id: 'stream-0',
-            raw: parsed.raw,
-            blocks: parsed.blocks,
-          },
-        ]
-      }
-      const next = [...prev]
-      const last = next[next.length - 1]!
-      if (last.type === 'stream') {
-        const parsed = appendStreamChunk(last.raw, chunk)
-        next[next.length - 1] = {
-          ...last,
-          raw: parsed.raw,
-          blocks: parsed.blocks,
-        }
-      } else {
-        streamSegSeq.current += 1
-        const parsed = appendStreamChunk('', chunk)
-        next.push({
-          type: 'stream',
-          id: `stream-${streamSegSeq.current}`,
-          raw: parsed.raw,
-          blocks: parsed.blocks,
-        })
-      }
-      return next
-    })
-  }, [])
+  /** Line-edit + classify PTY bytes; never re-parses full history. */
+  const pushStreamText = useCallback(
+    (chunk: string) => {
+      const feed = feedRef.current
+      if (!feed) return
+      const changed = feedPush(feed, chunk)
+      if (changed) scheduleFeedUi()
+    },
+    [scheduleFeedUi],
+  )
 
   const sendStdin = useCallback((data: string) => {
     const ws = wsRef.current
@@ -796,43 +779,49 @@ function SessionTerminal({
 
   const onChatSend = useCallback(
     (text: string) => {
-      userTurnSeq.current += 1
-      const id = `u-${sessionId}-${userTurnSeq.current}`
-      streamSegSeq.current += 1
-      setTimeline((prev) => [
-        ...prev,
-        { type: 'user', id, text },
-        {
-          type: 'stream',
-          id: `stream-${streamSegSeq.current}`,
-          raw: '',
-          blocks: [],
-        },
-      ])
+      const feed = feedRef.current
+      if (feed) {
+        feedAddUser(feed, text)
+        scheduleFeedUi()
+      }
       // Line-oriented submit; Enter for most shells / agent CLIs.
       sendStdin(text.endsWith('\n') || text.endsWith('\r') ? text : `${text}\r`)
     },
-    [sessionId, sendStdin],
+    [sendStdin, scheduleFeedUi],
   )
 
-  // Flatten timeline into ordered feed items for TerminalChatView.
-  const chatFeedItems = useMemo(() => {
+  // Snapshot only when feedGen changes or mode switches to chat.
+  const chatFeedItems = useMemo((): ChatFeedItem[] => {
+    if (viewMode !== 'chat') return []
+    const feed = feedRef.current
+    if (!feed) return []
+    void feedGen
+    const blocks = feedSnapshot(feed)
     const items: ChatFeedItem[] = []
-    for (const e of timeline) {
-      if (e.type === 'user') {
-        items.push({ type: 'user', id: e.id, text: e.text })
+    for (const b of blocks) {
+      if (b.kind === 'user') {
+        items.push({ type: 'user', id: b.id, text: b.text })
       } else {
-        for (const b of e.blocks) {
-          items.push({
-            type: 'block',
-            id: `${e.id}:${b.id}`,
-            block: { ...b, id: `${e.id}:${b.id}` },
-          })
-        }
+        items.push({ type: 'block', id: b.id, block: b })
       }
     }
     return items
-  }, [timeline])
+  }, [feedGen, viewMode])
+
+  // Entering chat: flush one paint from the ref without waiting for more PTY.
+  useEffect(() => {
+    if (viewMode !== 'chat') return
+    setFeedGen(feedRef.current?.gen ?? 0)
+  }, [viewMode])
+
+  useEffect(() => {
+    return () => {
+      if (feedRafRef.current) {
+        window.clearTimeout(feedRafRef.current)
+        feedRafRef.current = 0
+      }
+    }
+  }, [])
 
   /**
    * Fit the terminal to its host and notify PTY only when cols/rows change.
