@@ -76,6 +76,29 @@ func TestLogin_bootstrapAdmin(t *testing.T) {
 	}
 }
 
+// Coolify path domains strip the /api prefix: browser still calls /api/auth/login
+// but the API process may receive /auth/login. Both must work.
+func TestLogin_coolifyStrippedPath(t *testing.T) {
+	_, mux := testServer(t)
+	body, _ := json.Marshal(map[string]string{"username": "admin", "password": "123456"})
+	req := httptest.NewRequest(http.MethodPost, "/auth/login", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("stripped path status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	var resp struct {
+		Token string `json:"token"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Token == "" {
+		t.Fatal("empty token on stripped path")
+	}
+}
+
 func TestLogin_badPassword(t *testing.T) {
 	_, mux := testServer(t)
 	body, _ := json.Marshal(map[string]string{"username": "admin", "password": "wrong"})

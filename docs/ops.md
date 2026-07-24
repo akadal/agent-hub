@@ -43,12 +43,15 @@ No specific PaaS or control panel is required. Coolify, Traefik, Caddy, nginx, c
 | Dummy SSH | `ssh-target` | host **27343** → container **27343** | e2e (`root`/`targetpass`) |
 
 **Coolify checklist**
-- Domain → **web** service, container port **80**
-- Do **not** set `VITE_API_BASE_URL` to localhost (SPA must use same-origin `/api`)
-- Credentials: `BOOTSTRAP_ADMIN_USERNAME` / `BOOTSTRAP_ADMIN_PASSWORD` are **re-applied on every restart** (password sync)
-- After credential env change: **redeploy/restart api** (not only web)
-- Data lives in the **api** volume (`DATA_DIR=/data`), not in the browser — phone and desktop share it after login
-- Terminal resume uses **tmux** on the remote host (`remote_session`); browser close does not kill the shell
+- **web** domain: `https://your.host` → container port **80**
+- **api** domain (optional path): `https://your.host/api` → API container port **27341**  
+  Coolify **strips** `/api` before the request hits Go. The API therefore accepts both  
+  `/api/auth/login` (Compose/nginx) and `/auth/login` (Coolify strip).
+- Do **not** set `VITE_API_BASE_URL` to localhost
+- Credentials: `BOOTSTRAP_ADMIN_USERNAME` / `BOOTSTRAP_ADMIN_PASSWORD` re-applied every API restart
+- After env change: **rebuild/redeploy api + web**
+- Prefer leaving **ssh-target** without a public domain (internal only)
+- Data in **api** volume; terminal resume via **tmux** on remote host
 
 **Remote channel:** SSH to registered IP/hostname. **Tailscale is not required** for this path (optional mesh later).
 

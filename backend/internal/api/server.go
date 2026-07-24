@@ -33,33 +33,49 @@ var upgrader = websocket.Upgrader{
 }
 
 // NewMux returns the full Agent Hub HTTP surface.
+//
+// Routes are registered twice:
+//   - with /api prefix — Docker Compose / nginx reverse-proxy (full path)
+//   - without /api     — Coolify path-based domains that strip the /api prefix
+//     (e.g. Domain for api: https://host/api → backend sees /auth/login)
 func (s *Server) NewMux() http.Handler {
 	mux := http.NewServeMux()
+	mount := func(method, path string, h http.HandlerFunc) {
+		// path must start with /
+		mux.HandleFunc(method+" "+path, h)
+		if path == "/health" {
+			return // only one health
+		}
+		// dual: /api + path (path already may be /auth/login etc.)
+		if !strings.HasPrefix(path, "/api") {
+			mux.HandleFunc(method+" /api"+path, h)
+		}
+	}
+
 	mux.HandleFunc("GET /health", s.handleHealth)
-	mux.HandleFunc("GET /api/hello", s.handleHello)
+	// Coolify often maps /api/health → strip → /health (already above)
 
-	mux.HandleFunc("POST /api/auth/login", s.handleLogin)
-	mux.HandleFunc("GET /api/me", s.requireAuth(s.handleMe))
+	mount("GET", "/hello", s.handleHello)
+	mount("POST", "/auth/login", s.handleLogin)
+	mount("GET", "/me", s.requireAuth(s.handleMe))
 
-	mux.HandleFunc("GET /api/machines", s.requireAuth(s.handleListMachines))
-	mux.HandleFunc("POST /api/machines", s.requireAuth(s.handleCreateMachine))
-	mux.HandleFunc("GET /api/machines/{id}", s.requireAuth(s.handleGetMachine))
-	mux.HandleFunc("DELETE /api/machines/{id}", s.requireAuth(s.handleDeleteMachine))
-	mux.HandleFunc("POST /api/machines/{id}/exec", s.requireAuth(s.handleMachineExec))
+	mount("GET", "/machines", s.requireAuth(s.handleListMachines))
+	mount("POST", "/machines", s.requireAuth(s.handleCreateMachine))
+	mount("GET", "/machines/{id}", s.requireAuth(s.handleGetMachine))
+	mount("DELETE", "/machines/{id}", s.requireAuth(s.handleDeleteMachine))
+	mount("POST", "/machines/{id}/exec", s.requireAuth(s.handleMachineExec))
 
-	// Terminal sessions under a machine (1:N)
-	mux.HandleFunc("GET /api/machines/{id}/terminals", s.requireAuth(s.handleListTerminals))
-	mux.HandleFunc("POST /api/machines/{id}/terminals", s.requireAuth(s.handleCreateTerminal))
+	mount("GET", "/machines/{id}/terminals", s.requireAuth(s.handleListTerminals))
+	mount("POST", "/machines/{id}/terminals", s.requireAuth(s.handleCreateTerminal))
 
-	mux.HandleFunc("GET /api/terminals", s.requireAuth(s.handleListAllTerminals))
-	mux.HandleFunc("GET /api/terminals/{id}", s.requireAuth(s.handleGetTerminal))
-	mux.HandleFunc("PATCH /api/terminals/{id}", s.requireAuth(s.handlePatchTerminal))
-	mux.HandleFunc("DELETE /api/terminals/{id}", s.requireAuth(s.handleCloseTerminal))
-	mux.HandleFunc("POST /api/terminals/{id}/exec", s.requireAuth(s.handleTerminalExec))
-	mux.HandleFunc("GET /api/terminals/{id}/ws", s.handleTerminalWS) // auth via query/header
+	mount("GET", "/terminals", s.requireAuth(s.handleListAllTerminals))
+	mount("GET", "/terminals/{id}", s.requireAuth(s.handleGetTerminal))
+	mount("PATCH", "/terminals/{id}", s.requireAuth(s.handlePatchTerminal))
+	mount("DELETE", "/terminals/{id}", s.requireAuth(s.handleCloseTerminal))
+	mount("POST", "/terminals/{id}/exec", s.requireAuth(s.handleTerminalExec))
+	mount("GET", "/terminals/{id}/ws", s.handleTerminalWS)
 
-	// Legacy machine-level WS still works (opens ephemeral shell without session record)
-	mux.HandleFunc("GET /api/machines/{id}/terminal", s.handleMachineTerminalWS)
+	mount("GET", "/machines/{id}/terminal", s.handleMachineTerminalWS)
 
 	return withCORS(mux)
 }
