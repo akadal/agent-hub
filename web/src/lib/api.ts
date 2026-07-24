@@ -189,6 +189,17 @@ export async function listTerminals(
   return data.terminals ?? []
 }
 
+export async function listAllTerminals(
+  token: string,
+): Promise<TerminalSession[]> {
+  const res = await fetch(`${API_BASE}/api/terminals`, {
+    headers: authHeaders(token),
+  })
+  if (!res.ok) throw new Error(await parseError(res))
+  const data = (await res.json()) as { terminals: TerminalSession[] }
+  return data.terminals ?? []
+}
+
 export async function createTerminal(
   token: string,
   machineId: string,
