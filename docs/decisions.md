@@ -18,15 +18,15 @@ Lightweight log of decisions that affect structure. Full product requirements st
 
 ---
 
-## ADR-002: Manual machine registration only
+## ADR-002: Manual machine registration (+ optional Tailscale import)
 
 | Field | Value |
 |-------|--------|
-| Status | accepted |
-| Date | 2026-07-23 |
+| Status | accepted (amended) |
+| Date | 2026-07-23; amended 2026-07-24 |
 | Context | Discovery vs explicit inventory. |
-| Decision | v1 machines are registered manually (IP/address entry). No automatic discovery. |
-| Consequences | Simpler security boundary; operators own the inventory. |
+| Decision | Machines are an **explicit inventory** owned by the operator. Primary path remains manual IP/hostname register. **Optional one-shot import** from the Tailscale API (`TAILSCALE_API_KEY`) lists authorized devices and creates machine rows on user click — not continuous auto-discovery, not a Tailscale daemon dependency. |
+| Consequences | Security boundary stays operator-owned. Import needs an API access token on the api service; SSH user/password are still entered once per import batch. |
 
 ---
 

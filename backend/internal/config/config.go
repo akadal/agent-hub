@@ -16,6 +16,9 @@ type Config struct {
 	BootstrapAdminPassword     string
 	DataDir                    string
 	AccessDefaultTailscaleOnly bool
+	// Optional Tailscale API for one-shot machine import (no daemon required).
+	TailscaleAPIKey  string
+	TailscaleTailnet string // empty or "-" = key owner's default tailnet
 }
 
 // Load reads configuration from environment variables with safe local defaults.
@@ -59,6 +62,11 @@ func Load() Config {
 	if v := os.Getenv("ACCESS_DEFAULT_TAILSCALE_ONLY"); v != "" {
 		tailscaleOnly, _ = strconv.ParseBool(v)
 	}
+	tsKey := strings.TrimSpace(os.Getenv("TAILSCALE_API_KEY"))
+	tsNet := strings.TrimSpace(os.Getenv("TAILSCALE_TAILNET"))
+	if tsNet == "" {
+		tsNet = "-"
+	}
 	return Config{
 		HTTPAddr:                   addr,
 		JWTSecret:                  secret,
@@ -67,5 +75,7 @@ func Load() Config {
 		BootstrapAdminPassword:     pass,
 		DataDir:                    dataDir,
 		AccessDefaultTailscaleOnly: tailscaleOnly,
+		TailscaleAPIKey:            tsKey,
+		TailscaleTailnet:           tsNet,
 	}
 }

@@ -59,6 +59,16 @@ If **both** web and api have the same domain (`agents.example`), Coolify may sen
 
 **Remote channel:** SSH to registered IP/hostname. **Tailscale is not required** for this path (optional mesh later).
 
+**Optional — Import from Tailscale (Machines UI)**
+
+1. Create an **API access token** (Admin → Settings → Keys), not a node auth key.
+2. On the **api** service set:
+   - `TAILSCALE_API_KEY=tskey-api-…`
+   - `TAILSCALE_TAILNET=-` (default tailnet for the key)
+3. Redeploy/restart api. Open **Machines** → **Import from Tailscale** → enter shared SSH user/password/port → add devices.
+4. Import uses each device’s Tailscale IPv4 (`100.x`) as address. API host must still be able to **route SSH** to those IPs (typically: api also on the tailnet).
+5. Re-import is safe: already-registered addresses are skipped.
+
 Automated smoke:
 
 ```bash

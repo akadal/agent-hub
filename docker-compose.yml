@@ -29,6 +29,9 @@ services:
       BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-123456}
       DATA_DIR: /data
       ACCESS_DEFAULT_TAILSCALE_ONLY: ${ACCESS_DEFAULT_TAILSCALE_ONLY:-false}
+      # Optional: Machines page "Import from Tailscale" (API access token, not auth key)
+      TAILSCALE_API_KEY: ${TAILSCALE_API_KEY:-}
+      TAILSCALE_TAILNET: ${TAILSCALE_TAILNET:-}
     volumes:
       - api-data:/data
     healthcheck:

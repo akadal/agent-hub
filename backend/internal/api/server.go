@@ -14,6 +14,7 @@ import (
 	"github.com/akadal/agent-hub/backend/internal/auth"
 	"github.com/akadal/agent-hub/backend/internal/sshterm"
 	"github.com/akadal/agent-hub/backend/internal/store"
+	"github.com/akadal/agent-hub/backend/internal/tailscale"
 	"github.com/gorilla/websocket"
 )
 
@@ -22,6 +23,9 @@ type Server struct {
 	Store  *store.Store
 	Tokens *auth.TokenService
 	Log    *log.Logger
+	// Optional Tailscale API import (empty key = feature off).
+	TailscaleAPIKey  string
+	TailscaleTailnet string
 }
 
 type ctxKey int
@@ -66,6 +70,9 @@ func (s *Server) NewMux() http.Handler {
 
 	mount("GET", "/machines", s.requireAuth(s.handleListMachines))
 	mount("POST", "/machines", s.requireAuth(s.handleCreateMachine))
+	// Tailscale import — register before /machines/{id} is fine; patterns are distinct.
+	mount("GET", "/machines/tailscale", s.requireAuth(s.handleTailscaleStatus))
+	mount("POST", "/machines/tailscale/import", s.requireAuth(s.handleTailscaleImport))
 	mount("GET", "/machines/{id}", s.requireAuth(s.handleGetMachine))
 	mount("DELETE", "/machines/{id}", s.requireAuth(s.handleDeleteMachine))
 	mount("POST", "/machines/{id}/exec", s.requireAuth(s.handleMachineExec))
@@ -198,6 +205,135 @@ func (s *Server) handleCreateMachine(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, m.Public())
+}
+
+func (s *Server) tailscaleClient() *tailscale.Client {
+	return &tailscale.Client{
+		APIKey:  s.TailscaleAPIKey,
+		Tailnet: s.TailscaleTailnet,
+	}
+}
+
+func (s *Server) handleTailscaleStatus(w http.ResponseWriter, r *http.Request) {
+	client := s.tailscaleClient()
+	if !client.Configured() {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"configured": false,
+			"hint":       "Set TAILSCALE_API_KEY on the api service (Keys page in Tailscale admin). Optional: TAILSCALE_TAILNET=-",
+		})
+		return
+	}
+	devices, err := client.ListDevices(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	c := claimsFrom(r.Context())
+	existing := s.Store.ListMachines(c.UserID)
+	known := make(map[string]bool, len(existing))
+	for _, m := range existing {
+		known[m.Address] = true
+	}
+	type devView struct {
+		Name             string `json:"name"`
+		Hostname         string `json:"hostname"`
+		OS               string `json:"os"`
+		PreferredAddress string `json:"preferred_address"`
+		Online           bool   `json:"online"`
+		AlreadyAdded     bool   `json:"already_added"`
+	}
+	out := make([]devView, 0, len(devices))
+	for _, d := range devices {
+		out = append(out, devView{
+			Name:             d.Name,
+			Hostname:         d.Hostname,
+			OS:               d.OS,
+			PreferredAddress: d.PreferredAddress,
+			Online:           d.Online,
+			AlreadyAdded:     known[d.PreferredAddress],
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"configured": true,
+		"devices":    out,
+	})
+}
+
+type tailscaleImportRequest struct {
+	SSHUser     string `json:"ssh_user"`
+	SSHPassword string `json:"ssh_password"`
+	Port        int    `json:"port"`
+	// OnlineOnly skips devices not seen recently (default true).
+	OnlineOnly *bool `json:"online_only"`
+}
+
+func (s *Server) handleTailscaleImport(w http.ResponseWriter, r *http.Request) {
+	client := s.tailscaleClient()
+	if !client.Configured() {
+		writeErr(w, http.StatusServiceUnavailable, "Tailscale import not configured — set TAILSCALE_API_KEY on api")
+		return
+	}
+	var req tailscaleImportRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		writeErr(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	if req.Port <= 0 {
+		req.Port = 22
+	}
+	if strings.TrimSpace(req.SSHUser) == "" {
+		req.SSHUser = "root"
+	}
+	onlineOnly := true
+	if req.OnlineOnly != nil {
+		onlineOnly = *req.OnlineOnly
+	}
+
+	devices, err := client.ListDevices(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, err.Error())
+		return
+	}
+
+	c := claimsFrom(r.Context())
+	existing := s.Store.ListMachines(c.UserID)
+	known := make(map[string]bool, len(existing))
+	for _, m := range existing {
+		known[m.Address] = true
+	}
+
+	added := make([]store.MachinePublic, 0)
+	skipped := 0
+	for _, d := range devices {
+		if onlineOnly && !d.Online {
+			skipped++
+			continue
+		}
+		if known[d.PreferredAddress] {
+			skipped++
+			continue
+		}
+		m, err := s.Store.CreateMachine(
+			c.UserID,
+			d.Name,
+			d.PreferredAddress,
+			req.Port,
+			req.SSHUser,
+			req.SSHPassword,
+		)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		known[d.PreferredAddress] = true
+		added = append(added, m.Public())
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"added":   added,
+		"skipped": skipped,
+		"message": fmt.Sprintf("Added %d machine(s), skipped %d", len(added), skipped),
+	})
 }
 
 func (s *Server) handleListMachines(w http.ResponseWriter, r *http.Request) {

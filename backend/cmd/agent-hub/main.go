@@ -27,11 +27,16 @@ func main() {
 		Store:  st,
 		Tokens: tokens,
 		Log:    log.Default(),
+		TailscaleAPIKey:  cfg.TailscaleAPIKey,
+		TailscaleTailnet: cfg.TailscaleTailnet,
 	}
 
 	addr := cfg.HTTPAddr
 	if addr == "" {
 		addr = ":27341"
+	}
+	if cfg.TailscaleAPIKey != "" {
+		log.Printf("tailscale import enabled (tailnet=%s)", cfg.TailscaleTailnet)
 	}
 	log.Printf("agent-hub api listening on %s (data=%s)", addr, cfg.DataDir)
 	if err := http.ListenAndServe(addr, srv.NewMux()); err != nil {

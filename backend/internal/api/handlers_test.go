@@ -337,3 +337,36 @@ func TestTerminalSessions_createListClose(t *testing.T) {
 		t.Fatalf("get status=%d", rrG.Code)
 	}
 }
+
+func TestTailscaleStatus_notConfigured(t *testing.T) {
+	_, mux := testServer(t)
+	tok := loginToken(t, mux, "admin", "123456")
+	req := httptest.NewRequest(http.MethodGet, "/api/machines/tailscale", nil)
+	req.Header.Set("Authorization", "Bearer "+tok)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["configured"] != false {
+		t.Fatalf("want configured=false, got %v", body)
+	}
+}
+
+func TestTailscaleImport_notConfigured(t *testing.T) {
+	_, mux := testServer(t)
+	tok := loginToken(t, mux, "admin", "123456")
+	body, _ := json.Marshal(map[string]any{"ssh_user": "root", "port": 22})
+	req := httptest.NewRequest(http.MethodPost, "/api/machines/tailscale/import", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status=%d want 503 body=%s", rr.Code, rr.Body.String())
+	}
+}

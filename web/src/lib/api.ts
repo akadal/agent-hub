@@ -117,6 +117,55 @@ export async function createMachine(
   return (await res.json()) as Machine
 }
 
+export type TailscaleDevice = {
+  name: string
+  hostname: string
+  os: string
+  preferred_address: string
+  online: boolean
+  already_added: boolean
+}
+
+export type TailscaleStatus = {
+  configured: boolean
+  hint?: string
+  devices?: TailscaleDevice[]
+}
+
+export type TailscaleImportResult = {
+  added: Machine[]
+  skipped: number
+  message: string
+}
+
+export async function getTailscaleStatus(
+  token: string,
+): Promise<TailscaleStatus> {
+  const res = await fetch(`${API_BASE}/api/machines/tailscale`, {
+    headers: authHeaders(token),
+  })
+  if (!res.ok) throw new Error(await parseError(res))
+  return (await res.json()) as TailscaleStatus
+}
+
+export async function importFromTailscale(
+  token: string,
+  body: {
+    ssh_user: string
+    ssh_password: string
+    port: number
+    online_only?: boolean
+  },
+): Promise<TailscaleImportResult> {
+  const res = await fetch(`${API_BASE}/api/machines/tailscale/import`, {
+    method: 'POST',
+    headers: authHeaders(token),
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) throw new Error(await parseError(res))
+  return (await res.json()) as TailscaleImportResult
+}
+
 export async function deleteMachine(
   token: string,
   id: string,
