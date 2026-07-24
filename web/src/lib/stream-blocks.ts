@@ -1,14 +1,9 @@
 /**
- * Incremental terminal → chat feed.
+ * Lite SSH stream → readable feed.
  *
- * Raw PTY bytes are reduced through a small line editor (CR overwrite,
- * backspace, erase-line, ANSI strip) into clean logical lines, then grouped
- * into a bounded block list. Never re-parses the full history.
- *
- * Performance:
- * - O(chunk) push, no full-buffer re-parse
- * - hard caps on lines / blocks / characters
- * - UI should throttle setState; this module is pure + mutable state object
+ * Raw PTY bytes go through a line editor (CR overwrite, backspace, erase-line,
+ * ANSI/CSI drop) then a cleaner that removes prompts, echoes, and consecutive
+ * repeats. Output is a capped block list — never a full-buffer re-parse.
  */
 
 export type StreamBlockKind = 'output' | 'thinking' | 'command' | 'system' | 'user'
@@ -21,11 +16,13 @@ export interface StreamBlock {
 }
 
 /** Caps keep the feed readable and the tab responsive. */
-export const FEED_MAX_BLOCKS = 80
-export const FEED_MAX_LINES = 400
-export const FEED_MAX_CHARS = 80_000
-/** Merge consecutive plain output into fewer bubbles. */
-export const FEED_GROUP_LINES = 20
+export const FEED_MAX_BLOCKS = 60
+export const FEED_MAX_LINES = 300
+export const FEED_MAX_CHARS = 48_000
+/** Merge consecutive plain output into fewer blocks. */
+export const FEED_GROUP_LINES = 24
+/** Remember last N user inputs to drop shell echoes. */
+const RECENT_USER_MAX = 12
 
 const THINKING_OPEN =
   /^(?:<\s*thinking\s*>|\[\s*thinking\s*\]|thinking\s*:|reasoning\s*:|thought\s*:)$/i
@@ -36,12 +33,47 @@ const THINKING_CLOSE =
 const SYSTEM_LINE =
   /^\[(?:connection lost|reconnected|session closed|ssh ready)[^\]]*\]$/i
 
+/**
+ * Shell prompt at start of line, e.g.:
+ *   32d3aaa375dc:~#
+ *   root@host:/var#
+ *   user@host:~/src$
+ */
+const PROMPT_AT_START =
+  /^(?:[\w.-]+@)?[\w.-]+:[^\n#$]*[#\$]\s*/
+
+/** Whole line is only a prompt (no command). */
+const PROMPT_ONLY =
+  /^(?:[\w.-]+@)?[\w.-]+:[^\n#$]*[#\$]\s*$/
+
 export function isSlashCommandLine(line: string): boolean {
   const t = line.trimStart()
   if (!t.startsWith('/')) return false
   if (t.startsWith('//') || t.startsWith('/*')) return false
   if (/^\/[A-Za-z0-9._-]+\//.test(t)) return false
   return /^\/[A-Za-z][\w-]*(?:\s|$)/.test(t)
+}
+
+/**
+ * Remove shell chrome from a finished line: prompt prefix, PS2 `> `,
+ * trailing whitespace. Exported for tests.
+ */
+export function cleanShellLine(line: string): string {
+  let s = line.replace(/\s+$/g, '')
+  // Drop OSC-like leftovers that slipped through as printable garbage
+  s = s.replace(/\u0000/g, '')
+  // Shell prompt prefix (may appear after CR redraw on same visual line)
+  s = s.replace(PROMPT_AT_START, '')
+  // Secondary / continuation prompt
+  if (/^>\s+/.test(s)) s = s.replace(/^>\s+/, '')
+  // Some shells echo: "# command" after strip fails — rare
+  return s.replace(/\s+$/g, '')
+}
+
+export function isPromptOnlyLine(line: string): boolean {
+  const t = line.replace(/\s+$/g, '')
+  if (!t.trim()) return true
+  return PROMPT_ONLY.test(t)
 }
 
 /** Strip CSI/OSC/charset for one-shot plain text (tests + system notes). */
@@ -55,7 +87,6 @@ export function stripAnsi(input: string): string {
       continue
     }
     if (c === 0x0d) {
-      // bare CR → treat as newline boundary for one-shot strip
       out += '\n'
       i++
       continue
@@ -78,11 +109,11 @@ export function stripAnsi(input: string): string {
 /** Skip an ESC sequence starting at `i` (points at ESC). Returns new index. */
 function skipEscape(s: string, i: number): number {
   if (i >= s.length || s.charCodeAt(i) !== 0x1b) return i + 1
-  i++ // after ESC
+  i++
   if (i >= s.length) return i
   const n = s.charCodeAt(i)
 
-  // CSI: ESC [ ... final byte @-~
+  // CSI: ESC [ params final
   if (n === 0x5b /* [ */) {
     i++
     while (i < s.length) {
@@ -93,7 +124,7 @@ function skipEscape(s: string, i: number): number {
     return i
   }
 
-  // OSC: ESC ] ... BEL or ST (ESC \)
+  // OSC: ESC ] … BEL or ST
   if (n === 0x5d /* ] */) {
     i++
     while (i < s.length) {
@@ -105,20 +136,20 @@ function skipEscape(s: string, i: number): number {
     return i
   }
 
-  // Charset / simple two-byte: ESC ( B, ESC =, etc.
-  if (n === 0x28 || n === 0x29 || n === 0x2a || n === 0x2b) {
+  // SS3 / charset designations
+  if (n === 0x28 || n === 0x29 || n === 0x2a || n === 0x2b || n === 0x4e || n === 0x4f) {
     return Math.min(i + 2, s.length)
   }
+  // ESC = / ESC > application keypad etc.
+  if (n === 0x3d || n === 0x3e) return i + 1
   return i + 1
 }
 
-// ── Line editor (mutable, for CR overwrite / progress bars) ─────────────────
+// ── Line editor ─────────────────────────────────────────────────────────────
 
 interface LineEditor {
-  /** Committed cells of the current line (string built with overwrite). */
   buf: string
   cursor: number
-  /** Incomplete ESC sequence held across chunks. */
   esc: string
 }
 
@@ -135,8 +166,7 @@ function editorWrite(ed: LineEditor, ch: string) {
   if (ed.cursor >= ed.buf.length) {
     ed.buf += ch
   } else {
-    ed.buf =
-      ed.buf.slice(0, ed.cursor) + ch + ed.buf.slice(ed.cursor + 1)
+    ed.buf = ed.buf.slice(0, ed.cursor) + ch + ed.buf.slice(ed.cursor + 1)
   }
   ed.cursor++
 }
@@ -148,7 +178,6 @@ function editorBackspace(ed: LineEditor) {
 }
 
 function editorEraseLine(ed: LineEditor, mode: number) {
-  // 0: cursor→end, 1: start→cursor, 2: whole line
   if (mode === 2) {
     editorReset(ed)
     return
@@ -161,21 +190,22 @@ function editorEraseLine(ed: LineEditor, mode: number) {
   ed.buf = ed.buf.slice(0, ed.cursor)
 }
 
-// ── Feed state ──────────────────────────────────────────────────────────────
+// ── Feed ────────────────────────────────────────────────────────────────────
 
 export interface StreamFeed {
   ed: LineEditor
-  /** Ring of classified logical lines (for rebuild if needed). */
   lines: { kind: StreamBlockKind; text: string }[]
   blocks: StreamBlock[]
-  /** Open block that still accepts merges. */
   open: StreamBlock | null
   openLineCount: number
   inThinking: boolean
   nextId: number
   totalChars: number
-  /** Generation bumps when display content changes. */
   gen: number
+  /** Last committed display text (for consecutive dedupe). */
+  lastText: string
+  /** Recent user composer lines — used to drop local echo. */
+  recentUser: string[]
 }
 
 export function createStreamFeed(): StreamFeed {
@@ -189,6 +219,8 @@ export function createStreamFeed(): StreamFeed {
     nextId: 1,
     totalChars: 0,
     gen: 0,
+    lastText: '',
+    recentUser: [],
   }
 }
 
@@ -213,75 +245,136 @@ function trimFeed(feed: StreamFeed) {
     const dropped = feed.blocks.shift()
     if (!dropped) break
     feed.totalChars -= dropped.text.length
-    // Drop matching prefix lines (approx: drop one line group)
     const n = Math.max(1, dropped.text.split('\n').length)
     feed.lines.splice(0, n)
   }
-  // Keep totalChars non-negative
   if (feed.totalChars < 0) {
     feed.totalChars = feed.blocks.reduce((a, b) => a + b.text.length, 0)
   }
 }
 
-function classifyLine(
+/** True when this PTY line is a local echo of a recent composer submit. */
+function isUserEcho(feed: StreamFeed, text: string): boolean {
+  for (let i = 0; i < feed.recentUser.length; i++) {
+    const u = feed.recentUser[i]!
+    if (text === u) {
+      feed.recentUser.splice(i, 1)
+      return true
+    }
+    // Multi-line submit: drop each echoed physical line
+    const parts = u.split(/\r?\n/)
+    if (parts.length > 1 && parts.includes(text)) return true
+    // Partial first-line echo while the user command is longer
+    if (u.startsWith(text) && text.length >= 4) return true
+    // Shell re-wrapped a quoted command (printf '…') — drop fragments that
+    // still contain quotes/backslashes from the submitted string. Do NOT use
+    // bare `%` here: progress output like "Downloading 10%" would false-match
+    // against a printf format string containing `%%`.
+    if (
+      text.length >= 4 &&
+      /['"`\\]/.test(text) &&
+      u.includes(text)
+    ) {
+      return true
+    }
+  }
+  return false
+}
+
+/**
+ * Normalize a raw committed line into display text, or null to drop.
+ */
+export function normalizeCommittedLine(
   feed: StreamFeed,
   rawLine: string,
 ): { kind: StreamBlockKind; text: string } | null {
-  // Strip trailing spaces from line-editor buffer; keep leading (prompts).
-  const line = rawLine.replace(/\s+$/g, '')
-  const trimmed = line.trim()
-  if (!trimmed) return null // drop empty lines — they only create noise
+  // Prompt-only (incl. after CSI stripped): "host:~# "
+  if (isPromptOnlyLine(rawLine)) return null
 
-  if (SYSTEM_LINE.test(trimmed)) {
-    return { kind: 'system', text: trimmed }
+  let text = cleanShellLine(rawLine)
+  if (!text.trim()) return null
+
+  // Drop pure cursor/status leftovers / dangling quote from PS2 close
+  if (/^[\[\]?0-9;]*$/.test(text)) return null
+  if (/^['"`\\]+$/.test(text.trim())) return null
+
+  if (isUserEcho(feed, text)) return null
+
+  // printf-style shell echoes keep `%%`; real progress almost never does.
+  if (text.includes('%%')) return null
+
+  // Consecutive identical lines (progress spam, repeated echo)
+  if (text === feed.lastText) return null
+
+  if (SYSTEM_LINE.test(text.trim())) {
+    return { kind: 'system', text: text.trim() }
   }
 
   if (feed.inThinking) {
-    if (THINKING_CLOSE.test(trimmed)) {
+    if (THINKING_CLOSE.test(text.trim())) {
       feed.inThinking = false
       return null
     }
-    return { kind: 'thinking', text: line }
+    return { kind: 'thinking', text }
   }
 
-  if (THINKING_CLOSE.test(trimmed)) {
+  if (THINKING_CLOSE.test(text.trim())) {
     feed.inThinking = false
     return null
   }
 
-  // Single-line "thinking: …" — do not keep the region open (avoids swallowing
-  // the next normal reply line).
-  const inline = trimmed.match(THINKING_OPEN_INLINE)
+  const inline = text.trim().match(THINKING_OPEN_INLINE)
   if (inline) {
-    return { kind: 'thinking', text: inline[1] ?? line }
+    return { kind: 'thinking', text: inline[1] ?? text }
   }
 
-  if (THINKING_OPEN.test(trimmed)) {
+  if (THINKING_OPEN.test(text.trim())) {
     feed.inThinking = true
-    return null // marker-only line; following lines are thinking until close
+    return null
   }
 
-  // XML-style open with body on same line: <thinking>foo
-  const xmlOpen = trimmed.match(/^<\s*thinking\s*>\s*(.*)$/i)
+  const xmlOpen = text.trim().match(/^<\s*thinking\s*>\s*(.*)$/i)
   if (xmlOpen) {
     feed.inThinking = true
     if (xmlOpen[1]) return { kind: 'thinking', text: xmlOpen[1] }
     return null
   }
 
-  if (isSlashCommandLine(line)) {
-    return { kind: 'command', text: trimmed }
+  if (isSlashCommandLine(text)) {
+    return { kind: 'command', text: text.trim() }
   }
 
-  return { kind: 'output', text: line }
+  return { kind: 'output', text }
 }
+
+const PROGRESS_LINE = /^(.*?)(\d{1,3})\s*%\s*$/
 
 function pushClassified(
   feed: StreamFeed,
   kind: StreamBlockKind,
   text: string,
 ) {
+  // Collapse "Downloading 10%" → "50%" → "100%" into the last frame only.
+  if (kind === 'output' && feed.open?.kind === 'output') {
+    const prog = text.match(PROGRESS_LINE)
+    if (prog) {
+      const lines = feed.open.text.split('\n')
+      const prev = lines[lines.length - 1] ?? ''
+      const prevProg = prev.match(PROGRESS_LINE)
+      if (prevProg && prevProg[1] === prog[1]) {
+        const oldLen = prev.length
+        lines[lines.length - 1] = text
+        feed.open.text = lines.join('\n')
+        feed.totalChars += text.length - oldLen
+        feed.lastText = text
+        feed.gen++
+        return
+      }
+    }
+  }
+
   feed.lines.push({ kind, text })
+  feed.lastText = text
 
   const collapsible = kind === 'thinking'
   const canMerge =
@@ -306,7 +399,6 @@ function pushClassified(
       feed.openLineCount = 1
       feed.totalChars += text.length
     } else {
-      // command / system / user — sealed immediately as their own block
       const block: StreamBlock = {
         id: `b${feed.nextId++}`,
         kind,
@@ -325,31 +417,32 @@ function pushClassified(
 function commitEditorLine(feed: StreamFeed) {
   const raw = feed.ed.buf
   editorReset(feed.ed)
-  const classified = classifyLine(feed, raw)
+  const classified = normalizeCommittedLine(feed, raw)
   if (!classified) return
   pushClassified(feed, classified.kind, classified.text)
 }
 
-/**
- * Apply CSI that affects the line editor. Unknown sequences are ignored.
- * `params` is the numeric parameter string (e.g. "2", "0", "").
- */
 function applyCsi(ed: LineEditor, params: string, final: string) {
   const n = params === '' ? 0 : parseInt(params.split(';')[0] || '0', 10)
   switch (final) {
-    case 'K': // erase in line
+    case 'K':
       editorEraseLine(ed, Number.isFinite(n) ? n : 0)
       break
-    case 'C': // cursor forward — soft: move cursor without writing
+    case 'J':
+      // Clear screen / display — only wipe the in-progress line, keep history.
+      if (n === 2 || n === 3) editorReset(ed)
+      else if (n === 0) editorEraseLine(ed, 0)
+      break
+    case 'C':
       ed.cursor = Math.min(ed.buf.length, ed.cursor + (n || 1))
       break
-    case 'D': // cursor back
+    case 'D':
       ed.cursor = Math.max(0, ed.cursor - (n || 1))
       break
-    case 'G': // absolute column (1-based)
+    case 'G':
       ed.cursor = Math.max(0, Math.min(ed.buf.length, (n || 1) - 1))
       break
-    // A/B/H/f/J screen motions: ignore (we are a line feed, not a full TTY)
+    // n = DSR, A/B/H/f cursor motion — ignore (line-oriented viewer)
     default:
       break
   }
@@ -366,7 +459,6 @@ export function feedPush(feed: StreamFeed, chunk: string): boolean {
   const s = chunk
   const ed = feed.ed
 
-  // Resume incomplete escape held from previous chunk
   if (ed.esc) {
     const combined = ed.esc + s
     ed.esc = ''
@@ -377,14 +469,12 @@ export function feedPush(feed: StreamFeed, chunk: string): boolean {
     const c = s.charCodeAt(i)
 
     if (c === 0x1b) {
-      // Need at least ESC + one more; if incomplete, stash
       if (i + 1 >= s.length) {
         ed.esc = s.slice(i)
         break
       }
       const next = s.charCodeAt(i + 1)
       if (next === 0x5b /* [ */) {
-        // CSI — find final byte
         let j = i + 2
         while (j < s.length) {
           const ch = s.charCodeAt(j)
@@ -402,13 +492,7 @@ export function feedPush(feed: StreamFeed, chunk: string): boolean {
         }
         continue
       }
-      // OSC or other — skip whole sequence (may span chunk)
       const after = skipEscape(s, i)
-      if (after === i + 1 && i + 1 >= s.length) {
-        ed.esc = s.slice(i)
-        break
-      }
-      // If skipEscape stopped at end mid-OSC, stash remainder
       if (
         next === 0x5d &&
         after >= s.length &&
@@ -423,7 +507,7 @@ export function feedPush(feed: StreamFeed, chunk: string): boolean {
     }
 
     if (c === 0x0d) {
-      // CR: return to start of line (progress bar / spinner overwrite)
+      // CR: return to column 0 (progress bars / prompt redraw)
       ed.cursor = 0
       i++
       continue
@@ -442,7 +526,6 @@ export function feedPush(feed: StreamFeed, chunk: string): boolean {
     }
 
     if (c === 0x09) {
-      // tab → spaces to next 8-col
       const spaces = 8 - (ed.cursor % 8)
       for (let t = 0; t < spaces; t++) editorWrite(ed, ' ')
       i++
@@ -461,7 +544,6 @@ export function feedPush(feed: StreamFeed, chunk: string): boolean {
   return feed.gen !== gen0
 }
 
-/** Snapshot of sealed + open blocks for rendering. */
 export function feedSnapshot(feed: StreamFeed): StreamBlock[] {
   if (!feed.open || !feed.open.text.trim()) return feed.blocks.slice()
   return [...feed.blocks, feed.open]
@@ -469,7 +551,8 @@ export function feedSnapshot(feed: StreamFeed): StreamBlock[] {
 
 /**
  * Record a user-sent line (composer). Seals current output so new PTY
- * output starts a fresh block after the user bubble.
+ * output starts a fresh block after the user bubble. Remembers text so
+ * local echo of the same line is dropped.
  */
 export function feedAddUser(feed: StreamFeed, text: string): StreamBlock {
   sealOpen(feed)
@@ -482,24 +565,28 @@ export function feedAddUser(feed: StreamFeed, text: string): StreamBlock {
   feed.blocks.push(block)
   feed.totalChars += text.length
   feed.lines.push({ kind: 'user', text })
+  feed.lastText = '' // allow shell to print same text as result
+  feed.recentUser.push(text)
+  if (feed.recentUser.length > RECENT_USER_MAX) {
+    feed.recentUser.splice(0, feed.recentUser.length - RECENT_USER_MAX)
+  }
   trimFeed(feed)
   feed.gen++
   return block
 }
 
-/** Flush incomplete line (e.g. before snapshot if prompt sits without NL). */
+/** Flush incomplete line (prompt sitting without NL). */
 export function feedFlushPartial(feed: StreamFeed): boolean {
   if (!feed.ed.buf.trim()) return false
+  // Bare prompt without NL — drop rather than show "host:~#"
+  if (isPromptOnlyLine(feed.ed.buf) || !cleanShellLine(feed.ed.buf).trim()) {
+    editorReset(feed.ed)
+    return false
+  }
   commitEditorLine(feed)
   return true
 }
 
-// ── Compatibility helpers (tests + simple one-shot parse) ───────────────────
-
-/**
- * One-shot parse of a complete stream into blocks (uses the incremental feed).
- * Prefer `feedPush` for live I/O.
- */
 export function parseStreamToBlocks(raw: string): StreamBlock[] {
   const feed = createStreamFeed()
   feedPush(feed, raw.endsWith('\n') ? raw : raw + '\n')
@@ -507,11 +594,6 @@ export function parseStreamToBlocks(raw: string): StreamBlock[] {
   return feedSnapshot(feed).filter((b) => b.kind !== 'user')
 }
 
-/**
- * @deprecated Prefer createStreamFeed + feedPush. Kept for call sites that
- * still pass full buffers — still uses incremental feed under the hood but
- * allocates a new feed each time (do not use in hot path).
- */
 export function appendStreamChunk(
   prevRaw: string,
   chunk: string,

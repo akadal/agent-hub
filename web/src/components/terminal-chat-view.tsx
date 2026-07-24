@@ -204,8 +204,8 @@ export function TerminalChatView({
           {empty ? (
             <div className="flex flex-col items-center gap-2 py-16 text-center text-sm text-neutral-400">
               <p className="max-w-[16rem] leading-relaxed">
-                Readable stream of this shell. Output is cleaned and capped so
-                the tab stays light.
+                Lite shell reader — prompts, ANSI, echoes and repeats are
+                filtered. Type below to send.
               </p>
               {status ? (
                 <p className="font-mono text-[11px] text-neutral-400">

@@ -1,0 +1,35 @@
+Welcome to Alpine!
+
+The Alpine Wiki contains a large amount of how-to guides and general
+information about administrating Alpine systems.
+See <https://wiki.alpinelinux.org/>.
+
+You can setup the system with the command: setup-alpine
+
+You may change this message by editing /etc/motd.
+
+32d3aaa375dc:~# [6n32d3aaa375dc:~# [Juname -a
+Linux 32d3aaa375dc 6.12.54-linuxkit #1 SMP Tue Nov  4 21:21:47 UTC 2025 aarch64 Linux
+32d3aaa375dc:~# [6nls --color=always /
+[1;34mbin[m    [1;34metc[m    [1;34mlib[m    [1;34mmnt[m    [1;34mproc[m   [1;34mrun[m    [1;34msrv[m    [1;34mtmp[m    [1;34mvar[m
+[1;34mdev[m    [1;34mhome[m   [1;34mmedia[m  [1;34mopt[m    [1;34mroot[m   [1;34msbin[m   [1;34msys[m    [1;34musr[m
+32d3aaa375dc:~# [6nprintf 'Downloading 10%%
+> Downloading 50%%
+> Downloading 100%%
+> '
+Downloading 10%
+Downloading 50%
+Downloading 100%
+32d3aaa375dc:~# [6necho /help
+/help
+32d3aaa375dc:~# [6nfor i in 1 2 3; do echo line$i; done
+line1
+line2
+line3
+32d3aaa375dc:~# [6necho same
+same
+32d3aaa375dc:~# echo same
+same
+32d3aaa375dc:~# echo same
+same
+32d3aaa375dc:~# [6n
