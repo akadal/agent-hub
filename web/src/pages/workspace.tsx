@@ -3,6 +3,8 @@ import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { Terminal as XTerm } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import {
+  Maximize2,
+  Minimize2,
   Monitor,
   Plus,
   Terminal as TerminalIcon,
@@ -30,6 +32,8 @@ import { cn } from '@/lib/utils'
  * Session-centric workspace: machine → N sessions.
  * Terminal panes stay mounted while switching tabs so SSH + scrollback
  * are preserved (only visibility changes). Dispose on explicit Close.
+ *
+ * Fullscreen is layout-only (fixed overlay) — never remounts xterm/WS.
  */
 export function WorkspacePage() {
   const { machineId: routeMachineId } = useParams<{ machineId?: string }>()
@@ -41,6 +45,10 @@ export function WorkspacePage() {
   const [sessions, setSessions] = useState<TerminalSession[]>([])
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  /** Immersive terminal UI (mobile-first); pure CSS — keeps shells alive. */
+  const [fullscreen, setFullscreen] = useState(false)
+  /** Bumped on layout changes so active xterm refits without remount. */
+  const [layoutEpoch, setLayoutEpoch] = useState(0)
   /** Per-session connection status for the active tab header. */
   const [statusById, setStatusById] = useState<Record<string, string>>({})
   /**
@@ -60,6 +68,31 @@ export function WorkspacePage() {
     () => sessions.find((s) => s.id === selectedSessionId),
     [sessions, selectedSessionId],
   )
+
+  const toggleFullscreen = useCallback(() => {
+    setFullscreen((v) => !v)
+    // After CSS applies, panes need a fit pass (window resize may not fire).
+    setLayoutEpoch((n) => n + 1)
+  }, [])
+
+  // Escape exits immersive mode; lock body scroll while fullscreen.
+  useEffect(() => {
+    if (!fullscreen) return
+    const prevOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        setFullscreen(false)
+        setLayoutEpoch((n) => n + 1)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => {
+      document.body.style.overflow = prevOverflow
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [fullscreen])
 
   const refreshMachines = useCallback(async () => {
     if (!token) return
@@ -189,8 +222,22 @@ export function WorkspacePage() {
     (selectedSessionId && statusById[selectedSessionId]) || 'idle'
 
   return (
-    <div className="flex h-[calc(100vh-3.5rem-2rem)] min-h-[420px] flex-col gap-0 overflow-hidden rounded-xl border border-border bg-card shadow-sm md:flex-row">
-      <aside className="flex w-full shrink-0 flex-col border-b border-border md:w-72 md:border-b-0 md:border-r">
+    <div
+      className={cn(
+        'flex flex-col gap-0 overflow-hidden bg-card md:flex-row',
+        fullscreen
+          ? // Cover app shell + safe areas; pure layout — no remount.
+            'fixed inset-0 z-50 h-[100dvh] min-h-0 rounded-none border-0 bg-background pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]'
+          : 'h-[calc(100vh-3.5rem-2rem)] min-h-[420px] rounded-xl border border-border shadow-sm',
+      )}
+    >
+      {/* Machines / sessions sidebar — hidden in immersive mode */}
+      <aside
+        className={cn(
+          'flex w-full shrink-0 flex-col border-b border-border md:w-72 md:border-b-0 md:border-r',
+          fullscreen && 'hidden',
+        )}
+      >
         <div className="flex items-center justify-between gap-2 px-3 py-3">
           <div className="flex items-center gap-2 text-sm font-semibold">
             <Monitor className="size-4" />
@@ -304,9 +351,16 @@ export function WorkspacePage() {
         </ScrollArea>
       </aside>
 
-      <section className="flex min-w-0 flex-1 flex-col">
-        <header className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-2">
-          <div className="min-w-0">
+      <section className="flex min-h-0 min-w-0 flex-1 flex-col">
+        <header
+          className={cn(
+            'flex shrink-0 items-center justify-between gap-2 border-b border-border',
+            fullscreen
+              ? 'bg-card/95 px-2 py-1.5 backdrop-blur supports-[backdrop-filter]:bg-card/80'
+              : 'flex-wrap px-4 py-2',
+          )}
+        >
+          <div className="min-w-0 flex-1">
             <div className="truncate text-sm font-semibold">
               {selectedSession?.name ?? 'No session selected'}
             </div>
@@ -314,44 +368,125 @@ export function WorkspacePage() {
               {selectedMachine
                 ? `${selectedMachine.name} · ${activeStatus}`
                 : 'Select a machine'}
+              {fullscreen ? (
+                <span className="hidden text-muted-foreground/70 sm:inline">
+                  {' '}
+                  · Esc to exit
+                </span>
+              ) : null}
             </div>
           </div>
-          <div className="flex gap-2">
+          <div className="flex shrink-0 items-center gap-1 sm:gap-2">
             <Button
-              size="sm"
-              variant="outline"
-              disabled={!selectedMachineId || busy}
-              onClick={() => void onNewSession()}
+              size={fullscreen ? 'icon' : 'sm'}
+              variant={fullscreen ? 'secondary' : 'outline'}
+              onClick={toggleFullscreen}
+              title={fullscreen ? 'Exit fullscreen (Esc)' : 'Fullscreen terminal'}
+              aria-label={fullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
+              aria-pressed={fullscreen}
+              className={fullscreen ? 'size-9 touch-manipulation' : undefined}
             >
-              <Plus className="size-4" />
-              New session
+              {fullscreen ? (
+                <Minimize2 className="size-4" />
+              ) : (
+                <>
+                  <Maximize2 className="size-4" />
+                  <span className="hidden sm:inline">Fullscreen</span>
+                </>
+              )}
             </Button>
-            {selectedSession ? (
+            {!fullscreen ? (
+              <>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={!selectedMachineId || busy}
+                  onClick={() => void onNewSession()}
+                >
+                  <Plus className="size-4" />
+                  <span className="hidden sm:inline">New session</span>
+                </Button>
+                {selectedSession ? (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => void onCloseSession(selectedSession.id)}
+                  >
+                    <Trash2 className="size-4" />
+                    <span className="hidden sm:inline">Close</span>
+                  </Button>
+                ) : null}
+              </>
+            ) : (
               <Button
-                size="sm"
+                size="icon"
                 variant="ghost"
-                onClick={() => void onCloseSession(selectedSession.id)}
+                disabled={!selectedMachineId || busy}
+                onClick={() => void onNewSession()}
+                title="New session"
+                aria-label="New session"
+                className="size-9 touch-manipulation"
               >
-                <Trash2 className="size-4" />
-                Close
+                <Plus className="size-4" />
               </Button>
-            ) : null}
+            )}
           </div>
         </header>
 
+        {/* Immersive session strip — switch shells without leaving fullscreen */}
+        {fullscreen && sessions.length > 0 ? (
+          <div className="flex shrink-0 gap-1.5 overflow-x-auto border-b border-border bg-muted/30 px-2 py-1.5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            {sessions.map((s) => {
+              const live = mountedSessionIds.includes(s.id)
+              const selected = s.id === selectedSessionId
+              return (
+                <button
+                  key={s.id}
+                  type="button"
+                  onClick={() => selectSession(s.id)}
+                  className={cn(
+                    'flex max-w-[10rem] shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium touch-manipulation transition-colors',
+                    selected
+                      ? 'bg-primary text-primary-foreground'
+                      : 'bg-background/80 text-foreground hover:bg-muted',
+                  )}
+                >
+                  <span className="truncate">{s.name}</span>
+                  {live ? (
+                    <span
+                      className={cn(
+                        'size-1.5 shrink-0 rounded-full',
+                        selected
+                          ? 'bg-primary-foreground/80'
+                          : 'bg-emerald-500',
+                      )}
+                    />
+                  ) : null}
+                </button>
+              )
+            })}
+          </div>
+        ) : null}
+
         {error ? (
-          <div className="border-b border-destructive/30 bg-destructive/10 px-4 py-2 text-sm text-destructive">
+          <div className="shrink-0 border-b border-destructive/30 bg-destructive/10 px-4 py-2 text-sm text-destructive">
             {error}
           </div>
         ) : null}
 
-        <div className="relative min-h-0 flex-1 bg-black p-2">
+        <div
+          className={cn(
+            'relative min-h-0 flex-1 bg-black',
+            fullscreen ? 'p-0' : 'p-2',
+          )}
+        >
           {token && mountedSessionIds.length > 0 ? (
             mountedSessionIds.map((id) => (
               <div
                 key={id}
                 className={cn(
-                  'absolute inset-2',
+                  'absolute',
+                  fullscreen ? 'inset-0' : 'inset-2',
                   id === selectedSessionId
                     ? 'z-10 visible'
                     : 'z-0 invisible pointer-events-none',
@@ -362,6 +497,7 @@ export function WorkspacePage() {
                   sessionId={id}
                   token={token}
                   active={id === selectedSessionId}
+                  layoutEpoch={layoutEpoch}
                   onStatus={(status) =>
                     setStatusById((prev) =>
                       prev[id] === status ? prev : { ...prev, [id]: status },
@@ -389,11 +525,14 @@ function SessionTerminal({
   sessionId,
   token,
   active,
+  layoutEpoch = 0,
   onStatus,
 }: {
   sessionId: string
   token: string
   active: boolean
+  /** Parent bumps this on fullscreen / layout changes to force fit. */
+  layoutEpoch?: number
   onStatus: (s: string) => void
 }) {
   const containerRef = useRef<HTMLDivElement>(null)
@@ -407,6 +546,23 @@ function SessionTerminal({
   const setStatus = useCallback((s: string) => {
     statusRef.current = s
     onStatusRef.current(s)
+  }, [])
+
+  const fitAndNotify = useCallback(() => {
+    const fit = fitRef.current
+    const term = termRef.current
+    const ws = wsRef.current
+    if (!fit || !term) return
+    fit.fit()
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(
+        JSON.stringify({
+          type: 'resize',
+          cols: term.cols,
+          rows: term.rows,
+        }),
+      )
+    }
   }, [])
 
   // Connect once per mount; stay alive while this component is mounted.
@@ -423,6 +579,8 @@ function SessionTerminal({
         foreground: '#e5e5e5',
         cursor: '#e5e5e5',
       },
+      // Slightly tighter on small screens after fit; scrollback kept.
+      scrollback: 5000,
     })
     const fit = new FitAddon()
     term.loadAddon(fit)
@@ -481,24 +639,18 @@ function SessionTerminal({
       }
     }, 25_000)
 
-    const onResize = () => {
-      if (!fitRef.current || !termRef.current) return
-      fitRef.current.fit()
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(
-          JSON.stringify({
-            type: 'resize',
-            cols: termRef.current.cols,
-            rows: termRef.current.rows,
-          }),
-        )
-      }
-    }
+    const onResize = () => fitAndNotify()
     window.addEventListener('resize', onResize)
+    // Mobile soft keyboard: visualViewport shrinks without window.resize on some iOS versions.
+    const vv = window.visualViewport
+    vv?.addEventListener('resize', onResize)
+    vv?.addEventListener('scroll', onResize)
 
     return () => {
       window.clearInterval(pingTimer)
       window.removeEventListener('resize', onResize)
+      vv?.removeEventListener('resize', onResize)
+      vv?.removeEventListener('scroll', onResize)
       dataDisp.dispose()
       ws.close()
       wsRef.current = null
@@ -510,30 +662,23 @@ function SessionTerminal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId, token])
 
-  // On tab focus: refit + focus xterm; publish current status to header
+  // On tab focus or layout change (fullscreen): refit + focus; publish status
   useEffect(() => {
     if (!active) return
     onStatusRef.current(statusRef.current)
-    // layout after becoming visible (invisible panes have zero size)
-    const id = requestAnimationFrame(() => {
-      const fit = fitRef.current
-      const term = termRef.current
-      const ws = wsRef.current
-      if (!fit || !term) return
-      fit.fit()
-      term.focus()
-      if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(
-          JSON.stringify({
-            type: 'resize',
-            cols: term.cols,
-            rows: term.rows,
-          }),
-        )
-      }
+    // Double rAF so fixed fullscreen CSS has applied before measuring.
+    let id2 = 0
+    const id1 = requestAnimationFrame(() => {
+      id2 = requestAnimationFrame(() => {
+        fitAndNotify()
+        termRef.current?.focus()
+      })
     })
-    return () => cancelAnimationFrame(id)
-  }, [active])
+    return () => {
+      cancelAnimationFrame(id1)
+      cancelAnimationFrame(id2)
+    }
+  }, [active, layoutEpoch, fitAndNotify])
 
   return <div ref={containerRef} className="h-full w-full" />
 }
