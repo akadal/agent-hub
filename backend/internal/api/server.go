@@ -505,12 +505,20 @@ func (s *Server) bridgeSSH(w http.ResponseWriter, r *http.Request, m store.Machi
 	go func() {
 		defer close(done)
 		buf := make([]byte, 4096)
+		// Hold incomplete multi-byte UTF-8 across reads so Turkish (and other)
+		// characters are not corrupted when a rune straddles a packet boundary.
+		var utf8buf sshterm.UTF8Buffer
 		for {
 			n, err := sess.Stdout().Read(buf)
 			if n > 0 {
-				_ = conn.WriteJSON(wsServerMsg{Type: "stdout", Data: string(buf[:n])})
+				if s := utf8buf.Take(buf[:n]); s != "" {
+					_ = conn.WriteJSON(wsServerMsg{Type: "stdout", Data: s})
+				}
 			}
 			if err != nil {
+				if tail := utf8buf.Flush(); tail != "" {
+					_ = conn.WriteJSON(wsServerMsg{Type: "stdout", Data: tail})
+				}
 				if err != io.EOF {
 					_ = conn.WriteJSON(wsServerMsg{Type: "error", Message: err.Error()})
 				}

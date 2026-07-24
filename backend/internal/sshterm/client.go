@@ -135,6 +135,8 @@ func OpenSession(t Target, remoteSession string, cols, rows int) (*Session, erro
 	}
 	modes := ssh.TerminalModes{
 		ssh.ECHO:          1,
+		ssh.ECHOCTL:       0,
+		ssh.IUTF8:         1, // terminal input is UTF-8 (Turkish and other wide sets)
 		ssh.TTY_OP_ISPEED: 14400,
 		ssh.TTY_OP_OSPEED: 14400,
 	}
@@ -143,6 +145,11 @@ func OpenSession(t Target, remoteSession string, cols, rows int) (*Session, erro
 		client.Close()
 		return nil, fmt.Errorf("request pty: %w", err)
 	}
+	// Best-effort: many sshd configs reject Setenv; shell wrapper below is the real fix.
+	_ = sess.Setenv("LANG", "C.UTF-8")
+	_ = sess.Setenv("LC_ALL", "C.UTF-8")
+	_ = sess.Setenv("LC_CTYPE", "C.UTF-8")
+
 	stdin, err := sess.StdinPipe()
 	if err != nil {
 		sess.Close()
@@ -156,14 +163,20 @@ func OpenSession(t Target, remoteSession string, cols, rows int) (*Session, erro
 		return nil, err
 	}
 
+	// Force a UTF-8 locale for the remote shell. Without this, hosts with C/POSIX
+	// locale mangle multi-byte characters (Turkish ğ, ş, ı, …). Prefer existing
+	// user locale when already set on the host.
+	const utf8Env = `export LANG="${LANG:-C.UTF-8}" LC_ALL="${LC_ALL:-C.UTF-8}" LC_CTYPE="${LC_CTYPE:-C.UTF-8}"; `
+
 	// Prefer durable tmux session; fall back to plain shell if tmux missing.
 	startErr := error(nil)
 	if remoteSession != "" && safeSessionName.MatchString(remoteSession) {
-		// -A: attach if exists, else create. Survives browser close/mobile switch.
-		cmd := fmt.Sprintf("tmux new-session -A -s %s || exec $SHELL -l", remoteSession)
+		// -A: attach if exists, else create. -u: force UTF-8 in tmux.
+		// Survives browser close/mobile switch.
+		cmd := utf8Env + fmt.Sprintf("tmux -u new-session -A -s %s || exec ${SHELL:-/bin/bash} -l", remoteSession)
 		startErr = sess.Start(cmd)
 	} else {
-		startErr = sess.Shell()
+		startErr = sess.Start(utf8Env + "exec ${SHELL:-/bin/bash} -l")
 	}
 	if startErr != nil {
 		sess.Close()
