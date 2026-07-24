@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"regexp"
 	"sync"
 	"time"
 
@@ -25,8 +26,9 @@ const dialTimeout = 15 * time.Second
 // keepaliveInterval sends SSH-level keepalives so idle shells are not dropped.
 const keepaliveInterval = 30 * time.Second
 
+var safeSessionName = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+
 // Dial opens an authenticated SSH client with TCP + SSH keepalives.
-// The client does not impose an idle timeout; sessions stay up until closed.
 func Dial(t Target) (*ssh.Client, error) {
 	if t.Port <= 0 {
 		t.Port = 22
@@ -39,9 +41,8 @@ func Dial(t Target) (*ssh.Client, error) {
 		Auth: []ssh.AuthMethod{
 			ssh.Password(t.Password),
 		},
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(), // local e2e / operator-managed hosts
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
 		Timeout:         dialTimeout,
-		// No ClientConfig field for session idle timeout — we keep the connection alive.
 	}
 	addr := net.JoinHostPort(t.Address, fmt.Sprintf("%d", t.Port))
 
@@ -114,7 +115,9 @@ type Session struct {
 }
 
 // OpenSession starts an interactive shell with a PTY and keepalives.
-func OpenSession(t Target, cols, rows int) (*Session, error) {
+// If remoteSession is non-empty, attaches/creates a tmux session of that name
+// so reconnects (other device/tab) resume the same shell.
+func OpenSession(t Target, remoteSession string, cols, rows int) (*Session, error) {
 	if cols <= 0 {
 		cols = 80
 	}
@@ -152,10 +155,20 @@ func OpenSession(t Target, cols, rows int) (*Session, error) {
 		client.Close()
 		return nil, err
 	}
-	if err := sess.Shell(); err != nil {
+
+	// Prefer durable tmux session; fall back to plain shell if tmux missing.
+	startErr := error(nil)
+	if remoteSession != "" && safeSessionName.MatchString(remoteSession) {
+		// -A: attach if exists, else create. Survives browser close/mobile switch.
+		cmd := fmt.Sprintf("tmux new-session -A -s %s || exec $SHELL -l", remoteSession)
+		startErr = sess.Start(cmd)
+	} else {
+		startErr = sess.Shell()
+	}
+	if startErr != nil {
 		sess.Close()
 		client.Close()
-		return nil, fmt.Errorf("start shell: %w", err)
+		return nil, fmt.Errorf("start shell: %w", startErr)
 	}
 
 	s := &Session{
@@ -177,7 +190,6 @@ func (s *Session) keepaliveLoop() {
 		case <-s.stopKA:
 			return
 		case <-t.C:
-			// OpenSSH-compatible keepalive; prevents idle NAT/firewall drops.
 			_, _, err := s.client.SendRequest("keepalive@openssh.com", true, nil)
 			if err != nil {
 				return
@@ -197,7 +209,7 @@ func (s *Session) Resize(cols, rows int) error {
 	return s.session.WindowChange(rows, cols)
 }
 
-// Close tears down the session and client.
+// Close tears down the SSH client link (tmux session keeps running remotely).
 func (s *Session) Close() error {
 	s.stopOnce.Do(func() {
 		if s.stopKA != nil {
@@ -219,4 +231,13 @@ func (s *Session) Close() error {
 // Wait blocks until the remote shell exits.
 func (s *Session) Wait() error {
 	return s.session.Wait()
+}
+
+// KillRemoteSession destroys the tmux session on the host (when user closes terminal).
+func KillRemoteSession(t Target, remoteSession string) error {
+	if remoteSession == "" || !safeSessionName.MatchString(remoteSession) {
+		return nil
+	}
+	_, err := RunCommand(t, fmt.Sprintf("tmux kill-session -t %s 2>/dev/null || true", remoteSession))
+	return err
 }

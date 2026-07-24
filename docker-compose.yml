@@ -47,8 +47,8 @@ services:
       context: ./web
       dockerfile: Dockerfile
       args:
-        # Same-origin in browser (empty). Coolify domain works without baking localhost.
-        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-}
+        # Force empty — never bake host-local API into the SPA image.
+        VITE_API_BASE_URL: ""
     container_name: agent-hub-web
     ports:
       # Host 27342 → container 80 (proxy/Coolify should target container port 80)

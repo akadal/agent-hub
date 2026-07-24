@@ -2,7 +2,7 @@
 # Listens on uncommon port 27343 to avoid Coolify / host SSH clashes on 22.
 FROM alpine:3.20
 
-RUN apk add --no-cache openssh openssh-server bash \
+RUN apk add --no-cache openssh openssh-server bash tmux \
   && ssh-keygen -A \
   && echo "root:targetpass" | chpasswd \
   && sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config \

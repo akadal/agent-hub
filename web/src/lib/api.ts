@@ -1,4 +1,16 @@
-const API_BASE = import.meta.env.VITE_API_BASE_URL ?? ''
+/**
+ * API origin. Never use a baked-in localhost URL in the browser — that makes
+ * production pages call the developer's machine (desktop works "with local data",
+ * mobile login fails). Same-origin (empty base) is always correct behind Coolify.
+ */
+function resolveApiBase(): string {
+  const raw = String(import.meta.env.VITE_API_BASE_URL ?? '').trim()
+  if (!raw) return ''
+  if (/localhost|127\.0\.0\.1/i.test(raw)) return ''
+  return raw.replace(/\/$/, '')
+}
+
+const API_BASE = resolveApiBase()
 
 export type User = {
   id: string
@@ -22,6 +34,8 @@ export type TerminalSession = {
   status: string
   created_at: string
   updated_at: string
+  /** Server-side durable shell name (tmux) when available */
+  remote_session?: string
 }
 
 export type LoginResult = {
@@ -205,8 +219,8 @@ export async function execOnTerminal(
 }
 
 export function sessionWsUrl(sessionId: string, token: string): string {
-  const base = API_BASE || window.location.origin
-  const u = new URL(base)
+  const base = API_BASE || (typeof window !== 'undefined' ? window.location.origin : '')
+  const u = new URL(base || 'http://localhost')
   u.protocol = u.protocol === 'https:' ? 'wss:' : 'ws:'
   u.pathname = `/api/terminals/${sessionId}/ws`
   u.search = `token=${encodeURIComponent(token)}`
@@ -215,8 +229,8 @@ export function sessionWsUrl(sessionId: string, token: string): string {
 
 /** @deprecated prefer sessionWsUrl */
 export function terminalWsUrl(machineId: string, token: string): string {
-  const base = API_BASE || window.location.origin
-  const u = new URL(base)
+  const base = API_BASE || (typeof window !== 'undefined' ? window.location.origin : '')
+  const u = new URL(base || 'http://localhost')
   u.protocol = u.protocol === 'https:' ? 'wss:' : 'ws:'
   u.pathname = `/api/machines/${machineId}/terminal`
   u.search = `token=${encodeURIComponent(token)}`

@@ -5,10 +5,10 @@ COPY package.json package-lock.json ./
 # npm install (not ci): lock may omit optional platform packages resolved only on linux
 RUN npm install --no-audit --no-fund
 COPY . .
-# Empty string = same-origin relative /api (required for production domains / Coolify HTTPS).
-# Local compose can still override with http://localhost:27341 if needed.
+# Always bake empty API base so Coolify never injects localhost into the SPA.
+# Runtime also strips localhost (see src/lib/api.ts). Same-origin /api via nginx.
 ARG VITE_API_BASE_URL=
-ENV VITE_API_BASE_URL=$VITE_API_BASE_URL
+ENV VITE_API_BASE_URL=
 RUN npm run build
 
 # Serve static files

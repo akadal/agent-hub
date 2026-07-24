@@ -42,7 +42,13 @@ No specific PaaS or control panel is required. Coolify, Traefik, Caddy, nginx, c
 | Web | `web` | host **27342** → container **80** | SPA; Coolify must target **80** |
 | Dummy SSH | `ssh-target` | host **27343** → container **27343** | e2e (`root`/`targetpass`) |
 
-**Coolify 502:** proxy was aiming at the wrong container port. Set the public service to **web** and port **80**. Rebuild after pull. Leave `VITE_API_BASE_URL` empty so the SPA uses `https://your-domain/api`.
+**Coolify checklist**
+- Domain → **web** service, container port **80**
+- Do **not** set `VITE_API_BASE_URL` to localhost (SPA must use same-origin `/api`)
+- Credentials: `BOOTSTRAP_ADMIN_USERNAME` / `BOOTSTRAP_ADMIN_PASSWORD` are **re-applied on every restart** (password sync)
+- After credential env change: **redeploy/restart api** (not only web)
+- Data lives in the **api** volume (`DATA_DIR=/data`), not in the browser — phone and desktop share it after login
+- Terminal resume uses **tmux** on the remote host (`remote_session`); browser close does not kill the shell
 
 **Remote channel:** SSH to registered IP/hostname. **Tailscale is not required** for this path (optional mesh later).
 

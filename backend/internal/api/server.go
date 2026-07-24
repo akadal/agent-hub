@@ -160,7 +160,8 @@ func (s *Server) handleCreateMachine(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid json body")
 		return
 	}
-	m, err := s.Store.CreateMachine(req.Name, req.Address, req.Port, req.SSHUser, req.SSHPassword)
+	c := claimsFrom(r.Context())
+	m, err := s.Store.CreateMachine(c.UserID, req.Name, req.Address, req.Port, req.SSHUser, req.SSHPassword)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
@@ -169,7 +170,8 @@ func (s *Server) handleCreateMachine(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleListMachines(w http.ResponseWriter, r *http.Request) {
-	list := s.Store.ListMachines()
+	c := claimsFrom(r.Context())
+	list := s.Store.ListMachines(c.UserID)
 	out := make([]store.MachinePublic, 0, len(list))
 	for _, m := range list {
 		out = append(out, m.Public())
@@ -184,11 +186,24 @@ func (s *Server) handleGetMachine(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "machine not found")
 		return
 	}
+	if !s.canAccessMachine(r, m) {
+		writeErr(w, http.StatusNotFound, "machine not found")
+		return
+	}
 	writeJSON(w, http.StatusOK, m.Public())
 }
 
 func (s *Server) handleDeleteMachine(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	m, err := s.Store.GetMachine(id)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "machine not found")
+		return
+	}
+	if !s.canAccessMachine(r, m) {
+		writeErr(w, http.StatusNotFound, "machine not found")
+		return
+	}
 	if err := s.Store.DeleteMachine(id); err != nil {
 		writeErr(w, http.StatusNotFound, "machine not found")
 		return
@@ -251,6 +266,15 @@ type createTerminalRequest struct {
 
 func (s *Server) handleCreateTerminal(w http.ResponseWriter, r *http.Request) {
 	machineID := r.PathValue("id")
+	m, err := s.Store.GetMachine(machineID)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "machine not found")
+		return
+	}
+	if !s.canAccessMachine(r, m) {
+		writeErr(w, http.StatusNotFound, "machine not found")
+		return
+	}
 	var req createTerminalRequest
 	_ = json.NewDecoder(r.Body).Decode(&req)
 	// default name: Session N
@@ -262,7 +286,8 @@ func (s *Server) handleCreateTerminal(w http.ResponseWriter, r *http.Request) {
 		}
 		req.Name = fmt.Sprintf("Session %d", len(existing)+1)
 	}
-	t, err := s.Store.CreateTerminal(machineID, req.Name)
+	c := claimsFrom(r.Context())
+	t, err := s.Store.CreateTerminal(machineID, c.UserID, req.Name)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			writeErr(w, http.StatusNotFound, "machine not found")
@@ -323,6 +348,19 @@ func (s *Server) handlePatchTerminal(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleCloseTerminal(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	t, err := s.Store.GetTerminal(id)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "terminal session not found")
+		return
+	}
+	if m, err := s.Store.GetMachine(t.MachineID); err == nil {
+		_ = sshterm.KillRemoteSession(sshterm.Target{
+			Address:  m.Address,
+			Port:     m.Port,
+			User:     m.SSHUser,
+			Password: m.SSHPassword,
+		}, t.RemoteSession)
+	}
 	if err := s.Store.CloseTerminal(id); err != nil {
 		writeErr(w, http.StatusNotFound, "terminal session not found")
 		return
@@ -359,7 +397,8 @@ func (s *Server) handleTerminalWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = s.Store.TouchTerminal(id)
-	s.bridgeSSH(w, r, m, "session "+t.Name)
+	// Durable tmux name so mobile/web reconnect attaches to the same shell.
+	s.bridgeSSH(w, r, m, t.RemoteSession, "session "+t.Name)
 }
 
 func (s *Server) handleMachineTerminalWS(w http.ResponseWriter, r *http.Request) {
@@ -372,7 +411,19 @@ func (s *Server) handleMachineTerminalWS(w http.ResponseWriter, r *http.Request)
 		writeErr(w, http.StatusNotFound, "machine not found")
 		return
 	}
-	s.bridgeSSH(w, r, m, "ephemeral")
+	s.bridgeSSH(w, r, m, "", "ephemeral")
+}
+
+func (s *Server) canAccessMachine(r *http.Request, m store.Machine) bool {
+	c := claimsFrom(r.Context())
+	if c == nil {
+		return false
+	}
+	// Legacy rows without owner are visible to any authenticated user.
+	if m.OwnerUserID == "" {
+		return true
+	}
+	return m.OwnerUserID == c.UserID || c.Role == "admin"
 }
 
 func (s *Server) authorizeWS(w http.ResponseWriter, r *http.Request) bool {
@@ -391,7 +442,7 @@ func (s *Server) authorizeWS(w http.ResponseWriter, r *http.Request) bool {
 	return true
 }
 
-func (s *Server) bridgeSSH(w http.ResponseWriter, r *http.Request, m store.Machine, label string) {
+func (s *Server) bridgeSSH(w http.ResponseWriter, r *http.Request, m store.Machine, remoteSession, label string) {
 	cols := 80
 	rows := 24
 	conn, err := upgrader.Upgrade(w, r, nil)
@@ -406,14 +457,18 @@ func (s *Server) bridgeSSH(w http.ResponseWriter, r *http.Request, m store.Machi
 		Port:     m.Port,
 		User:     m.SSHUser,
 		Password: m.SSHPassword,
-	}, cols, rows)
+	}, remoteSession, cols, rows)
 	if err != nil {
 		_ = conn.WriteJSON(wsServerMsg{Type: "error", Message: "ssh open failed: " + err.Error()})
 		return
 	}
 	defer sess.Close()
 
-	_ = conn.WriteJSON(wsServerMsg{Type: "ready", Message: "ssh session open (" + label + ")"})
+	msg := "ssh session open (" + label + ")"
+	if remoteSession != "" {
+		msg += " [tmux:" + remoteSession + "]"
+	}
+	_ = conn.WriteJSON(wsServerMsg{Type: "ready", Message: msg})
 
 	done := make(chan struct{})
 	go func() {

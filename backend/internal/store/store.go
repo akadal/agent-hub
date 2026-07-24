@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -58,19 +59,25 @@ func Open(dataDir string) (*Store, error) {
 	return s, nil
 }
 
-// EnsureBootstrapAdmin creates the bootstrap admin if no user with that username exists.
+// EnsureBootstrapAdmin creates the bootstrap admin if missing, or re-syncs the
+// password from env when the user already exists. Coolify/env credential
+// changes then take effect on every restart (self-hosted recovery path).
 func (s *Store) EnsureBootstrapAdmin(username, password string) error {
 	if username == "" || password == "" {
 		return fmt.Errorf("bootstrap admin username and password required")
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if _, ok := s.byName[username]; ok {
-		return nil
-	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
 		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if id, ok := s.byName[username]; ok {
+		u := s.users[id]
+		u.PasswordHash = string(hash)
+		u.Role = "admin"
+		s.users[id] = u
+		return s.saveLocked()
 	}
 	u := User{
 		ID:           uuid.NewString(),
@@ -110,8 +117,8 @@ func (s *Store) GetUser(id string) (User, error) {
 	return u, nil
 }
 
-// CreateMachine registers a new machine.
-func (s *Store) CreateMachine(name, address string, port int, sshUser, sshPassword string) (Machine, error) {
+// CreateMachine registers a new machine owned by ownerUserID.
+func (s *Store) CreateMachine(ownerUserID, name, address string, port int, sshUser, sshPassword string) (Machine, error) {
 	if name == "" || address == "" {
 		return Machine{}, fmt.Errorf("name and address are required")
 	}
@@ -123,6 +130,7 @@ func (s *Store) CreateMachine(name, address string, port int, sshUser, sshPasswo
 	}
 	m := Machine{
 		ID:          uuid.NewString(),
+		OwnerUserID: ownerUserID,
 		Name:        name,
 		Address:     address,
 		Port:        port,
@@ -139,12 +147,15 @@ func (s *Store) CreateMachine(name, address string, port int, sshUser, sshPasswo
 	return m, nil
 }
 
-// ListMachines returns all machines sorted by name.
-func (s *Store) ListMachines() []Machine {
+// ListMachines returns machines for ownerUserID (empty ownerID = all, admin use).
+func (s *Store) ListMachines(ownerUserID string) []Machine {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	out := make([]Machine, 0, len(s.machines))
 	for _, m := range s.machines {
+		if ownerUserID != "" && m.OwnerUserID != "" && m.OwnerUserID != ownerUserID {
+			continue
+		}
 		out = append(out, m)
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -184,7 +195,8 @@ func (s *Store) DeleteMachine(id string) error {
 }
 
 // CreateTerminal adds a named terminal session under a machine.
-func (s *Store) CreateTerminal(machineID, name string) (Terminal, error) {
+// remoteSession is the durable tmux name on the remote host (stable across reconnects).
+func (s *Store) CreateTerminal(machineID, ownerUserID, name string) (Terminal, error) {
 	if name == "" {
 		name = "Session"
 	}
@@ -194,13 +206,18 @@ func (s *Store) CreateTerminal(machineID, name string) (Terminal, error) {
 		return Terminal{}, ErrNotFound
 	}
 	now := time.Now().UTC()
+	id := uuid.NewString()
+	// tmux-safe name: letters, digits, underscore, hyphen
+	remote := "ah-" + strings.ReplaceAll(id, "-", "")[:12]
 	t := Terminal{
-		ID:        uuid.NewString(),
-		MachineID: machineID,
-		Name:      name,
-		Status:    "open",
-		CreatedAt: now,
-		UpdatedAt: now,
+		ID:            id,
+		MachineID:     machineID,
+		OwnerUserID:   ownerUserID,
+		Name:          name,
+		Status:        "open",
+		RemoteSession: remote,
+		CreatedAt:     now,
+		UpdatedAt:     now,
 	}
 	s.terminals[t.ID] = t
 	if err := s.saveLocked(); err != nil {
