@@ -18,6 +18,8 @@ export default defineConfig({
       '/api': {
         target: process.env.VITE_API_PROXY || 'http://localhost:27341',
         changeOrigin: true,
+        // Terminal bridge is WebSocket; without this, stream/classic stay "connecting…".
+        ws: true,
       },
       '/health': {
         target: process.env.VITE_API_PROXY || 'http://localhost:27341',

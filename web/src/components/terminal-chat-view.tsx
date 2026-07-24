@@ -40,8 +40,11 @@ const FeedRow = memo(function FeedRow({
 }) {
   if (item.type === 'user') {
     return (
-      <div className="flex justify-end py-1">
-        <div className="max-w-[90%] rounded-2xl bg-neutral-900 px-3.5 py-2 text-[14px] leading-relaxed text-white">
+      <div
+        className="flex justify-end py-1.5"
+        style={{ contentVisibility: 'auto', containIntrinsicSize: '0 48px' }}
+      >
+        <div className="max-w-[88%] rounded-2xl bg-neutral-900 px-3.5 py-2 text-[15px] leading-snug text-white">
           <pre className="whitespace-pre-wrap break-words font-sans">
             {item.text}
           </pre>
@@ -57,7 +60,10 @@ const FeedRow = memo(function FeedRow({
     const isCollapsed = collapsed[key] ?? true
     const panelId = `${baseId}-${key}`
     return (
-      <div className="py-1">
+      <div
+        className="py-1"
+        style={{ contentVisibility: 'auto', containIntrinsicSize: '0 36px' }}
+      >
         <button
           type="button"
           className={cn(
@@ -95,7 +101,10 @@ const FeedRow = memo(function FeedRow({
 
   if (b.kind === 'command') {
     return (
-      <div className="py-1">
+      <div
+        className="py-1"
+        style={{ contentVisibility: 'auto', containIntrinsicSize: '0 28px' }}
+      >
         <pre className="whitespace-pre-wrap break-words font-mono text-[13px] leading-relaxed text-violet-700">
           {b.text}
         </pre>
@@ -112,8 +121,11 @@ const FeedRow = memo(function FeedRow({
   }
 
   return (
-    <div className="py-1">
-      <pre className="whitespace-pre-wrap break-words font-mono text-[13px] leading-[1.55] text-neutral-800">
+    <div
+      className="py-1"
+      style={{ contentVisibility: 'auto', containIntrinsicSize: '0 80px' }}
+    >
+      <pre className="whitespace-pre-wrap break-words font-mono text-[13px] leading-[1.5] text-neutral-800">
         {b.text}
       </pre>
     </div>
@@ -121,7 +133,8 @@ const FeedRow = memo(function FeedRow({
 })
 
 /**
- * Minimal light stream reader. Renders a capped feed; does not own PTY I/O.
+ * Lite shell reader. Performance: content-visibility rows, throttled parent
+ * updates, scroll only when pinned to bottom — no live region spam.
  */
 export function TerminalChatView({
   items,
@@ -138,13 +151,20 @@ export function TerminalChatView({
   const stickBottom = useRef(true)
   const baseId = useId()
   const itemCount = items.length
-  const lastId = items[items.length - 1]?.id
+  const last = items[items.length - 1]
+  const lastId = last?.id
+  const lastLen = !last
+    ? 0
+    : last.type === 'block'
+      ? last.block.text.length
+      : last.text.length
 
   useEffect(() => {
     const el = listRef.current
     if (!el || !stickBottom.current) return
+    // Instant jump — smooth scroll fights rapid stream updates on mobile.
     el.scrollTop = el.scrollHeight
-  }, [itemCount, lastId])
+  }, [itemCount, lastId, lastLen])
 
   useEffect(() => {
     if (!active) return
@@ -156,7 +176,7 @@ export function TerminalChatView({
     const el = listRef.current
     if (!el) return
     stickBottom.current =
-      el.scrollHeight - el.scrollTop - el.clientHeight < 96
+      el.scrollHeight - el.scrollTop - el.clientHeight < 120
   }, [])
 
   const sendDraft = useCallback(() => {
@@ -188,14 +208,18 @@ export function TerminalChatView({
   return (
     <div
       className={cn(
-        'flex h-full min-h-0 w-full flex-col bg-[#fafafa] text-neutral-900',
+        'flex h-full min-h-0 w-full flex-col bg-[#f7f7f8] text-neutral-900',
         className,
       )}
     >
       <div
         ref={listRef}
         onScroll={onScroll}
-        className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-5 sm:px-6"
+        className={cn(
+          'min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 py-3 sm:px-5 sm:py-4',
+          // Isolate scroll work from the rest of the page (mobile Safari).
+          '[contain:strict] [transform:translateZ(0)]',
+        )}
         role="log"
         aria-live="off"
         aria-label="Terminal stream"
@@ -229,7 +253,11 @@ export function TerminalChatView({
 
       <form
         onSubmit={onForm}
-        className="shrink-0 border-t border-neutral-200/80 bg-[#fafafa] px-3 py-2.5 pb-[max(0.625rem,env(safe-area-inset-bottom))]"
+        className={cn(
+          'shrink-0 border-t border-neutral-200/90 bg-[#f7f7f8]/95 px-3 py-2',
+          'backdrop-blur supports-[backdrop-filter]:bg-[#f7f7f8]/90',
+          'pb-[max(0.5rem,env(safe-area-inset-bottom))]',
+        )}
       >
         <div className="mx-auto flex w-full max-w-xl items-end gap-2">
           <label className="sr-only" htmlFor={`${baseId}-composer`}>

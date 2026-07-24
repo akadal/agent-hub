@@ -82,6 +82,11 @@ export function WorkspacePage() {
   const [viewMode, setViewMode] = useState<TerminalViewMode>(() =>
     getTerminalViewMode(),
   )
+  /**
+   * Mobile: collapse machines/sessions picker so the terminal/stream
+   * gets the full viewport (biggest smoothness + UX win on phone).
+   */
+  const [pickerCollapsed, setPickerCollapsed] = useState(false)
 
   const shellRef = useRef<HTMLDivElement>(null)
   const scheduleLayoutFit = useCallback(() => {
@@ -268,6 +273,8 @@ export function WorkspacePage() {
     setMountedSessionIds((prev) =>
       prev.includes(selectedSessionId) ? prev : [...prev, selectedSessionId],
     )
+    // Mobile: focus the shell — machines list was eating half the viewport.
+    if (isNarrowViewport()) setPickerCollapsed(true)
   }, [selectedSessionId])
 
   const mountSession = useCallback((id: string) => {
@@ -301,6 +308,7 @@ export function WorkspacePage() {
       await refreshSessions()
       mountSession(t.id)
       setSearch({ session: t.id })
+      if (isNarrowViewport()) setPickerCollapsed(true)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -327,6 +335,8 @@ export function WorkspacePage() {
   function selectSession(id: string) {
     mountSession(id)
     setSearch({ session: id })
+    // Phone: jump straight into the shell, hide the long machine list.
+    if (isNarrowViewport()) setPickerCollapsed(true)
   }
 
   const activeStatus =
@@ -349,11 +359,11 @@ export function WorkspacePage() {
           : undefined
       }
     >
-      {/* Machines / sessions sidebar — hidden in immersive mode */}
+      {/* Machines / sessions sidebar — hidden in immersive mode / mobile focus */}
       <aside
         className={cn(
-          'flex max-h-[40vh] w-full shrink-0 flex-col border-b border-border md:max-h-none md:w-72 md:border-b-0 md:border-r',
-          fullscreen && 'hidden',
+          'flex max-h-[36vh] w-full shrink-0 flex-col border-b border-border md:max-h-none md:w-72 md:border-b-0 md:border-r',
+          (fullscreen || pickerCollapsed) && 'hidden',
         )}
       >
         <div className="flex items-center justify-between gap-2 px-3 py-3">
@@ -495,6 +505,18 @@ export function WorkspacePage() {
             </div>
           </div>
           <div className="flex shrink-0 items-center gap-1 sm:gap-2">
+            {pickerCollapsed && !fullscreen ? (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setPickerCollapsed(false)}
+                className="touch-manipulation md:hidden"
+                title="Show machines & sessions"
+              >
+                <Monitor className="size-4" />
+                <span className="text-xs">Sessions</span>
+              </Button>
+            ) : null}
             <Button
               size={fullscreen ? 'icon' : 'sm'}
               variant={viewMode === 'chat' ? 'secondary' : 'outline'}
@@ -745,12 +767,15 @@ function SessionTerminal({
   const scheduleFeedUi = useCallback(() => {
     if (viewModeRef.current !== 'chat') return
     if (feedRafRef.current) return
-    // Coalesce many WS frames into one paint (~1/frame).
+    // Coalesce bursts: at most ~10 UI commits/sec while PTY is streaming.
+    // Keeps mobile scroll smooth; sealed history stays in a ref until paint.
     feedRafRef.current = window.setTimeout(() => {
       feedRafRef.current = 0
-      const g = feedRef.current?.gen ?? 0
-      setFeedGen((prev) => (prev === g ? prev : g))
-    }, 50)
+      requestAnimationFrame(() => {
+        const g = feedRef.current?.gen ?? 0
+        setFeedGen((prev) => (prev === g ? prev : g))
+      })
+    }, 100)
   }, [])
 
   const setStatus = useCallback((s: string) => {

@@ -202,6 +202,8 @@ export interface StreamFeed {
   nextId: number
   totalChars: number
   gen: number
+  /** Bumps when a sealed block is added (not every open-text append). */
+  sealedGen: number
   /** Last committed display text (for consecutive dedupe). */
   lastText: string
   /** Recent user composer lines — used to drop local echo. */
@@ -219,6 +221,7 @@ export function createStreamFeed(): StreamFeed {
     nextId: 1,
     totalChars: 0,
     gen: 0,
+    sealedGen: 0,
     lastText: '',
     recentUser: [],
   }
@@ -234,6 +237,7 @@ function sealOpen(feed: StreamFeed) {
   feed.blocks.push(feed.open)
   feed.open = null
   feed.openLineCount = 0
+  feed.sealedGen++
 }
 
 function trimFeed(feed: StreamFeed) {
@@ -247,6 +251,7 @@ function trimFeed(feed: StreamFeed) {
     feed.totalChars -= dropped.text.length
     const n = Math.max(1, dropped.text.split('\n').length)
     feed.lines.splice(0, n)
+    feed.sealedGen++
   }
   if (feed.totalChars < 0) {
     feed.totalChars = feed.blocks.reduce((a, b) => a + b.text.length, 0)
