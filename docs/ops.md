@@ -38,11 +38,11 @@ No specific PaaS or control panel is required. Coolify, Traefik, Caddy, nginx, c
 
 | Service | Compose name | Host / container port | Notes |
 |---------|--------------|------------------------|--------|
-| API | `api` | **27341** | JWT auth; machines; SSH exec + WS terminal |
-| Web | `web` | **27342** | SPA; login + workspace |
-| Dummy SSH | `ssh-target` | **27343** | e2e target only (`root`/`targetpass`) |
+| API | `api` | host **27341** → container **27341** | JWT; machines; SSH |
+| Web | `web` | host **27342** → container **80** | SPA; Coolify must target **80** |
+| Dummy SSH | `ssh-target` | host **27343** → container **27343** | e2e (`root`/`targetpass`) |
 
-Defaults avoid common Coolify clashes on 8080 / 5173 / 22. Override with `API_PORT` / `WEB_PORT` / `SSH_TARGET_PORT`.
+**Coolify 502:** proxy was aiming at the wrong container port. Set the public service to **web** and port **80**. Rebuild after pull. Leave `VITE_API_BASE_URL` empty so the SPA uses `https://your-domain/api`.
 
 **Remote channel:** SSH to registered IP/hostname. **Tailscale is not required** for this path (optional mesh later).
 

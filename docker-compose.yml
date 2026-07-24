@@ -3,12 +3,13 @@
 #   cp .env.example .env
 #   docker compose up --build
 #
-# Endpoints (host) — uncommon defaults to avoid Coolify/shared-host clashes:
-#   API:  http://localhost:27341
-#   Web:  http://localhost:27342
-#   Dummy SSH target: localhost:27343 (user root / pass targetpass)
+# Endpoints (host):
+#   Web:  http://localhost:27342  (container listens on 80 — Coolify-friendly)
+#   API:  http://localhost:27341  (container 27341; not required publicly if web proxies /api)
+#   Dummy SSH: localhost:27343 → container 27343 (root / targetpass)
 #   From API container, register address "ssh-target" port 27343.
 #
+# Coolify: point the domain at the **web** service, port **80**.
 # Login (bootstrap): admin / 123456  (override via BOOTSTRAP_ADMIN_*)
 
 services:
@@ -23,7 +24,6 @@ services:
       HTTP_ADDR: ":27341"
       APP_ENV: ${APP_ENV:-development}
       JWT_SECRET: ${JWT_SECRET:-dev-only-change-me-agent-hub}
-      # forever | 0 | never | or Go duration e.g. 24h
       JWT_ACCESS_TTL: ${JWT_ACCESS_TTL:-forever}
       BOOTSTRAP_ADMIN_USERNAME: ${BOOTSTRAP_ADMIN_USERNAME:-admin}
       BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-123456}
@@ -47,16 +47,17 @@ services:
       context: ./web
       dockerfile: Dockerfile
       args:
-        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:27341}
+        # Same-origin in browser (empty). Coolify domain works without baking localhost.
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-}
     container_name: agent-hub-web
     ports:
-      - "${WEB_PORT:-27342}:27342"
+      # Host 27342 → container 80 (proxy/Coolify should target container port 80)
+      - "${WEB_PORT:-27342}:80"
     depends_on:
       api:
         condition: service_healthy
     restart: unless-stopped
 
-  # Dummy remote host for e2e: register as address=ssh-target, port=27343
   ssh-target:
     build:
       context: ./deploy/ssh-target

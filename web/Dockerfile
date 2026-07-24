@@ -5,9 +5,9 @@ COPY package.json package-lock.json ./
 # npm install (not ci): lock may omit optional platform packages resolved only on linux
 RUN npm install --no-audit --no-fund
 COPY . .
-# Empty base = same-origin relative /api when behind reverse proxy;
-# for compose we call the api service hostname from the browser via published port.
-ARG VITE_API_BASE_URL=http://localhost:27341
+# Empty string = same-origin relative /api (required for production domains / Coolify HTTPS).
+# Local compose can still override with http://localhost:27341 if needed.
+ARG VITE_API_BASE_URL=
 ENV VITE_API_BASE_URL=$VITE_API_BASE_URL
 RUN npm run build
 
@@ -15,5 +15,6 @@ RUN npm run build
 FROM nginx:1.27-alpine
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /app/dist /usr/share/nginx/html
-EXPOSE 27342
+# Coolify / reverse proxies expect container port 80 by default
+EXPOSE 80
 CMD ["nginx", "-g", "daemon off;"]

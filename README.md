@@ -53,9 +53,11 @@ docker compose up --build
 
 | Service | URL |
 |---------|-----|
-| Web UI | http://localhost:27342 |
-| API | http://localhost:27341 |
+| Web UI | http://localhost:27342 (container port **80**) |
+| API | http://localhost:27341 (also via web `/api` same-origin) |
 | Demo SSH host | `localhost:27343` (`root` / `targetpass`) |
+
+**Coolify:** domain → **web** service, exposed port **80** (not 27342).
 
 **Demo login** (seeded only if missing — set via env for your own instance):
 
