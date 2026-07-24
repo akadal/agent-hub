@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/akadal/agent-hub/backend/internal/auth"
@@ -898,6 +899,16 @@ func (s *Server) handlePatchSettings(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, st)
 }
 
+// WebSocket keepalive for long-lived terminals (especially mobile browsers).
+// Mobile Safari/Chrome suspend JS timers when the screen locks or the tab is
+// backgrounded; protocol-level Ping frames do not need client JS and also
+// reset reverse-proxy idle timers (Coolify/Traefik/nginx).
+const (
+	wsWriteWait  = 10 * time.Second
+	wsPongWait   = 90 * time.Second
+	wsPingPeriod = 25 * time.Second // must be < wsPongWait
+)
+
 func (s *Server) bridgeSSH(w http.ResponseWriter, r *http.Request, m store.Machine, remoteSession, label string) {
 	cols := 80
 	rows := 24
@@ -908,6 +919,30 @@ func (s *Server) bridgeSSH(w http.ResponseWriter, r *http.Request, m store.Machi
 	}
 	defer conn.Close()
 
+	// Serialize all writes: stdout pump, app pong, and protocol pings share conn.
+	var writeMu sync.Mutex
+	writeMsg := func(v any) error {
+		writeMu.Lock()
+		defer writeMu.Unlock()
+		_ = conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
+		err := conn.WriteJSON(v)
+		_ = conn.SetWriteDeadline(time.Time{})
+		return err
+	}
+	writePing := func() error {
+		writeMu.Lock()
+		defer writeMu.Unlock()
+		return conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(wsWriteWait))
+	}
+
+	// Browsers auto-reply to Ping with Pong. Extend read deadline on pong so
+	// a suspended phone eventually times out cleanly (client reconnects on wake).
+	_ = conn.SetReadDeadline(time.Now().Add(wsPongWait))
+	conn.SetPongHandler(func(string) error {
+		_ = conn.SetReadDeadline(time.Now().Add(wsPongWait))
+		return nil
+	})
+
 	sess, err := sshterm.OpenSession(sshterm.Target{
 		Address:  m.Address,
 		Port:     m.Port,
@@ -915,7 +950,7 @@ func (s *Server) bridgeSSH(w http.ResponseWriter, r *http.Request, m store.Machi
 		Password: m.SSHPassword,
 	}, remoteSession, cols, rows)
 	if err != nil {
-		_ = conn.WriteJSON(wsServerMsg{Type: "error", Message: "ssh open failed: " + err.Error()})
+		_ = writeMsg(wsServerMsg{Type: "error", Message: "ssh open failed: " + err.Error()})
 		return
 	}
 	defer sess.Close()
@@ -924,7 +959,7 @@ func (s *Server) bridgeSSH(w http.ResponseWriter, r *http.Request, m store.Machi
 	if remoteSession != "" {
 		msg += " [tmux:" + remoteSession + "]"
 	}
-	_ = conn.WriteJSON(wsServerMsg{Type: "ready", Message: msg})
+	_ = writeMsg(wsServerMsg{Type: "ready", Message: msg})
 
 	done := make(chan struct{})
 	go func() {
@@ -937,34 +972,58 @@ func (s *Server) bridgeSSH(w http.ResponseWriter, r *http.Request, m store.Machi
 			n, err := sess.Stdout().Read(buf)
 			if n > 0 {
 				if s := utf8buf.Take(buf[:n]); s != "" {
-					_ = conn.WriteJSON(wsServerMsg{Type: "stdout", Data: s})
+					if werr := writeMsg(wsServerMsg{Type: "stdout", Data: s}); werr != nil {
+						return
+					}
 				}
 			}
 			if err != nil {
 				if tail := utf8buf.Flush(); tail != "" {
-					_ = conn.WriteJSON(wsServerMsg{Type: "stdout", Data: tail})
+					_ = writeMsg(wsServerMsg{Type: "stdout", Data: tail})
 				}
 				if err != io.EOF {
-					_ = conn.WriteJSON(wsServerMsg{Type: "error", Message: err.Error()})
+					_ = writeMsg(wsServerMsg{Type: "error", Message: err.Error()})
 				}
 				return
 			}
 		}
 	}()
 
+	// Server-driven keepalive independent of mobile JS timers.
+	pingStop := make(chan struct{})
+	go func() {
+		t := time.NewTicker(wsPingPeriod)
+		defer t.Stop()
+		for {
+			select {
+			case <-pingStop:
+				return
+			case <-t.C:
+				if err := writePing(); err != nil {
+					// Unblock ReadJSON so we tear down promptly.
+					_ = conn.Close()
+					return
+				}
+			}
+		}
+	}()
+	defer close(pingStop)
+
 readLoop:
 	for {
 		var msg wsClientMsg
 		if err := conn.ReadJSON(&msg); err != nil {
-			// Client closed WS (session switch/tab close). Tear down SSH
-			// immediately so the stdout reader unblocks — otherwise we leak
-			// ESTABLISHED SSH connections forever waiting on <-done.
+			// Client closed WS, read deadline (stale phone sleep), or ping failure.
+			// Tear down SSH immediately so the stdout reader unblocks — otherwise
+			// we leak ESTABLISHED SSH connections forever waiting on <-done.
 			break readLoop
 		}
+		// Any client frame (stdin/resize/app-ping) proves the link is alive.
+		_ = conn.SetReadDeadline(time.Now().Add(wsPongWait))
 		switch msg.Type {
 		case "stdin", "input":
 			if _, err := sess.Stdin().Write([]byte(msg.Data)); err != nil {
-				_ = conn.WriteJSON(wsServerMsg{Type: "error", Message: "stdin write: " + err.Error()})
+				_ = writeMsg(wsServerMsg{Type: "error", Message: "stdin write: " + err.Error()})
 				break readLoop
 			}
 		case "resize":
@@ -972,7 +1031,7 @@ readLoop:
 				_ = sess.Resize(msg.Cols, msg.Rows)
 			}
 		case "ping":
-			_ = conn.WriteJSON(wsServerMsg{Type: "pong"})
+			_ = writeMsg(wsServerMsg{Type: "pong"})
 		}
 	}
 	// Always close SSH before waiting: unblocks stdout Read and drops TCP.

@@ -330,6 +330,41 @@ TAILSCALE_TAILNET=-`}
         </p>
       ) : null}
 
+      <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 px-4 py-3 text-sm">
+        <p className="font-medium text-foreground">
+          Long sessions &amp; mobile browsers
+        </p>
+        <ul className="mt-2 list-disc space-y-1 pl-5 text-muted-foreground">
+          <li>
+            Agent Hub already keeps the browser WebSocket and SSH link alive
+            (pings ~every 25s) and <strong>auto-reconnects</strong> after phone
+            sleep / network flap. Shell state lives in <code>tmux</code> on the
+            host — reconnect resumes the same session.
+          </li>
+          <li>
+            JWT sessions default to <code>forever</code> (
+            <code>JWT_ACCESS_TTL</code>). No re-login just because a terminal
+            stayed open.
+          </li>
+          <li>
+            <strong>If a host still drops idle SSH:</strong> on that machine
+            (sshd), ensure keepalives are allowed, e.g. in{' '}
+            <code>/etc/ssh/sshd_config</code>:{' '}
+            <code>ClientAliveInterval 30</code>,{' '}
+            <code>ClientAliveCountMax 240</code> (or higher), then{' '}
+            <code>systemctl reload sshd</code>. Without this, some hardened
+            hosts kill quiet sessions even when our client pings.
+          </li>
+          <li>
+            <strong>Coolify / reverse proxy:</strong> domain must point at the{' '}
+            <code>web</code> service (port 80). Edge idle timeout should be
+            ≥ a few minutes (WS pings keep it warm). If Traefik/Coolify has a
+            short custom timeout, raise it — Agent Hub cannot override the edge
+            from inside the container.
+          </li>
+        </ul>
+      </div>
+
       <div className="rounded-lg border border-border">
         <div className="border-b border-border px-4 py-2 text-sm font-medium">
           Registered machines {loading ? '(loading…)' : `(${machines.length})`}
@@ -347,11 +382,17 @@ TAILSCALE_TAILNET=-`}
                 key={m.id}
                 className="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center sm:justify-between"
               >
-                <div>
+                <div className="min-w-0">
                   <div className="font-medium">{m.name}</div>
                   <div className="font-mono text-xs text-muted-foreground">
                     {m.ssh_user}@{m.address}:{m.port}
                   </div>
+                  <p className="mt-1 text-[11px] leading-snug text-muted-foreground">
+                    Host tip: if this box drops idle shells, set sshd{' '}
+                    <code className="text-[10px]">ClientAliveInterval 30</code>{' '}
+                    + high <code className="text-[10px]">ClientAliveCountMax</code>{' '}
+                    (and install <code className="text-[10px]">tmux</code>).
+                  </p>
                 </div>
                 <div className="flex flex-wrap gap-2">
                   <Button

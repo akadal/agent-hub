@@ -122,6 +122,42 @@ Optional: hook git push to rebuild/redeploy on your platform of choice. Override
 - UI must remain usable on small screens (see PRD §9).
 - Prefer private mesh access over exposing the control plane to the public internet.
 
+### 6.1 Terminal disconnects on mobile (known cause + mitigations)
+
+**Symptom:** xterm shows disconnect / “session closed” after the phone sleeps, switches apps, or sits idle — even when the target is the same host that runs Agent Hub.
+
+**Why (not JWT):**
+
+| Layer | What happens on mobile |
+|-------|------------------------|
+| Browser | Safari/Chrome **suspend JS timers** and often **kill idle WebSockets** when the screen locks or the tab is backgrounded. Client-only `setInterval` pings are unreliable. |
+| Coolify / Traefik / edge | Idle HTTP/WS connections are closed if no traffic for the edge timeout. |
+| Agent Hub API | WebSocket bridge closes → SSH client closes. **tmux on the host keeps the shell.** |
+| Target sshd | Some hardened configs drop quiet SSH if client keepalives are ignored/disabled. |
+
+**What we force in-app (no host config required for the common case):**
+
+1. JWT default **`JWT_ACCESS_TTL=forever`** — login does not expire under long sessions.
+2. SSH TCP keepalive + `keepalive@openssh.com` every **30s** from the API → host.
+3. **Server-side WebSocket Ping** every **25s** (protocol frames; no client JS) + app-level JSON ping as backup.
+4. nginx (`web`) `proxy_read/send_timeout 7d`, buffering off for `/api/`.
+5. **Client auto-reconnect** with backoff + immediate reconnect on `visibilitychange` / `online` / `pageshow`. Reattach uses the same `remote_session` (tmux).
+
+**Operator checklist when it still drops:**
+
+1. Coolify: public domain only on **web:80**; do not short-timeout the service.
+2. Edge idle timeout ≥ a few minutes (WS pings keep it warm while the phone is awake).
+3. On the **target machine** (if sshd is strict):
+
+```text
+# /etc/ssh/sshd_config (or drop-in under sshd_config.d/)
+ClientAliveInterval 30
+ClientAliveCountMax 240
+# then: sudo systemctl reload sshd
+```
+
+4. Install **tmux** on targets so reconnect restores the same shell (otherwise a plain login shell is used and scrollback is not durable).
+
 ---
 
 ## 7. Incident checklist (draft)

@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useCallback, useState } from 'react'
 import { Navigate, Outlet, useLocation } from 'react-router-dom'
-import { Menu, LogOut } from 'lucide-react'
+import { LogOut, Menu, PanelLeftClose, PanelLeftOpen } from 'lucide-react'
 
 import { AppSidebar } from '@/components/layout/app-sidebar'
 import { Button } from '@/components/ui/button'
@@ -8,11 +8,58 @@ import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet'
 import { useAuth } from '@/lib/auth'
 import { cn } from '@/lib/utils'
 
+const SIDEBAR_PREF_KEY = 'ah-sidebar-open'
+
+function readDesktopSidebarOpen(): boolean {
+  try {
+    const v = localStorage.getItem(SIDEBAR_PREF_KEY)
+    if (v === '0' || v === 'false') return false
+    if (v === '1' || v === 'true') return true
+  } catch {
+    /* private mode / SSR */
+  }
+  return true
+}
+
+function writeDesktopSidebarOpen(open: boolean) {
+  try {
+    localStorage.setItem(SIDEBAR_PREF_KEY, open ? '1' : '0')
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Notify layout listeners (xterm fit) after sidebar width changes. */
+function notifyLayoutResize() {
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      window.dispatchEvent(new Event('resize'))
+    })
+  })
+}
+
 export function AppShell() {
   const [mobileOpen, setMobileOpen] = useState(false)
+  const [desktopSidebarOpen, setDesktopSidebarOpen] = useState(readDesktopSidebarOpen)
   const { user, loading, logout } = useAuth()
   const location = useLocation()
   const isWorkspace = location.pathname.startsWith('/workspace')
+
+  const setSidebarOpen = useCallback((open: boolean) => {
+    setDesktopSidebarOpen(open)
+    writeDesktopSidebarOpen(open)
+    notifyLayoutResize()
+  }, [])
+
+  const onNavToggle = useCallback(() => {
+    // Desktop (md+): collapse/expand permanent sidebar for full-width workspace.
+    // Mobile: open the sheet drawer (sidebar is not in the document flow).
+    if (typeof window !== 'undefined' && window.matchMedia('(min-width: 768px)').matches) {
+      setSidebarOpen(!desktopSidebarOpen)
+      return
+    }
+    setMobileOpen(true)
+  }, [desktopSidebarOpen, setSidebarOpen])
 
   if (loading) {
     return (
@@ -27,8 +74,19 @@ export function AppShell() {
 
   return (
     <div className="flex min-h-screen w-full bg-background">
-      <aside className="hidden w-64 shrink-0 border-r border-sidebar-border md:block">
-        <AppSidebar />
+      <aside
+        className={cn(
+          'hidden shrink-0 overflow-hidden border-sidebar-border transition-[width,border-color] duration-200 ease-out md:block',
+          desktopSidebarOpen
+            ? 'w-64 border-r'
+            : 'w-0 border-r-0',
+        )}
+        aria-hidden={!desktopSidebarOpen}
+      >
+        {/* Fixed inner width so collapse animates cleanly without reflow thrash */}
+        <div className="h-full w-64">
+          <AppSidebar />
+        </div>
       </aside>
 
       <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
@@ -43,23 +101,35 @@ export function AppShell() {
           <Button
             variant="ghost"
             size="icon"
-            className="md:hidden"
-            onClick={() => setMobileOpen(true)}
-            aria-label="Open navigation"
+            onClick={onNavToggle}
+            aria-label={
+              desktopSidebarOpen ? 'Collapse navigation' : 'Expand navigation'
+            }
+            title={
+              desktopSidebarOpen
+                ? 'Hide menu (more room for workspace)'
+                : 'Show menu'
+            }
           >
-            <Menu className="size-5" />
+            {/* Mobile always uses Menu; desktop shows open/close affordance */}
+            <Menu className="size-5 md:hidden" />
+            {desktopSidebarOpen ? (
+              <PanelLeftClose className="hidden size-5 md:block" />
+            ) : (
+              <PanelLeftOpen className="hidden size-5 md:block" />
+            )}
           </Button>
-          <div className="flex flex-1 flex-col">
-            <span className="text-sm font-medium">
+          <div className="flex min-w-0 flex-1 flex-col">
+            <span className="truncate text-sm font-medium">
               Multi-Machine Terminal Dashboard
             </span>
-            <span className="text-xs text-muted-foreground">
+            <span className="truncate text-xs text-muted-foreground">
               {user.username} · {user.role}
             </span>
           </div>
           <Button variant="ghost" size="sm" onClick={logout}>
             <LogOut className="size-4" />
-            Logout
+            <span className="hidden sm:inline">Logout</span>
           </Button>
         </header>
         <main

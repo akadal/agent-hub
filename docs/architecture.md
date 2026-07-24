@@ -52,6 +52,7 @@ Thin technical sketch. Product truth lives in `docs/prd.md`. Domain language liv
 - **Channel:** SSH + PTY (ADR-005). Each Terminal row has a `remote_session` name.
 - **Durability:** remote command prefers `tmux -u new-session -A -s <name>` when `tmux` is on PATH (Homebrew paths included); otherwise a plain login shell.
 - Browser disconnect closes the WebSocket/SSH client only; **tmux keeps the shell**. Reopen/reattach uses the same `remote_session`.
+- **Keepalive stack:** API sends SSH `keepalive@openssh.com` + TCP keepalive; WebSocket protocol Pings from the server (~25s) so reverse proxies and idle paths do not depend on mobile JS timers; browser auto-reconnects on close / visibility / online.
 - Explicit Close in the UI kills the remote tmux session when present.
 
 ---
