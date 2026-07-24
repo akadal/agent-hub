@@ -3,6 +3,7 @@ import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { Terminal as XTerm } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import {
+  MessageSquareText,
   Maximize2,
   Minimize2,
   Monitor,
@@ -13,6 +14,10 @@ import {
 } from 'lucide-react'
 import '@xterm/xterm/css/xterm.css'
 
+import {
+  TerminalChatView,
+  type ChatFeedItem,
+} from '@/components/terminal-chat-view'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Separator } from '@/components/ui/separator'
@@ -26,6 +31,15 @@ import {
   type TerminalSession,
 } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
+import {
+  appendStreamChunk,
+  type StreamBlock,
+} from '@/lib/stream-blocks'
+import {
+  getTerminalViewMode,
+  setTerminalViewMode,
+  type TerminalViewMode,
+} from '@/lib/terminal-view-pref'
 import { cn } from '@/lib/utils'
 
 /**
@@ -58,11 +72,28 @@ export function WorkspacePage() {
    * Switching selection only toggles visibility — does not remount.
    */
   const [mountedSessionIds, setMountedSessionIds] = useState<string[]>([])
+  /**
+   * Global display mode (classic xterm vs chat/stream). Shared by all sessions;
+   * persisted in localStorage — not per-session.
+   */
+  const [viewMode, setViewMode] = useState<TerminalViewMode>(() =>
+    getTerminalViewMode(),
+  )
 
   const shellRef = useRef<HTMLDivElement>(null)
   const scheduleLayoutFit = useCallback(() => {
     setLayoutEpoch((n) => n + 1)
   }, [])
+
+  const toggleViewMode = useCallback(() => {
+    setViewMode((prev) => {
+      const next: TerminalViewMode = prev === 'chat' ? 'classic' : 'chat'
+      setTerminalViewMode(next)
+      return next
+    })
+    // Classic needs a fit pass after becoming visible again.
+    scheduleLayoutFit()
+  }, [scheduleLayoutFit])
 
   const selectedMachineId = routeMachineId || machines[0]?.id || ''
   const selectedSessionId = search.get('session') || ''
@@ -463,6 +494,32 @@ export function WorkspacePage() {
           <div className="flex shrink-0 items-center gap-1 sm:gap-2">
             <Button
               size={fullscreen ? 'icon' : 'sm'}
+              variant={viewMode === 'chat' ? 'secondary' : 'outline'}
+              onClick={toggleViewMode}
+              title={
+                viewMode === 'chat'
+                  ? 'Switch to classic terminal'
+                  : 'Switch to stream / chat view'
+              }
+              aria-label={
+                viewMode === 'chat'
+                  ? 'Switch to classic terminal'
+                  : 'Switch to stream view'
+              }
+              aria-pressed={viewMode === 'chat'}
+              className="touch-manipulation max-md:size-9"
+            >
+              {viewMode === 'chat' ? (
+                <TerminalIcon className="size-4" />
+              ) : (
+                <MessageSquareText className="size-4" />
+              )}
+              <span className="hidden sm:inline">
+                {viewMode === 'chat' ? 'Classic' : 'Stream'}
+              </span>
+            </Button>
+            <Button
+              size={fullscreen ? 'icon' : 'sm'}
               variant={fullscreen ? 'secondary' : 'outline'}
               onClick={toggleFullscreen}
               title={fullscreen ? 'Exit fullscreen (Esc)' : 'Fullscreen terminal'}
@@ -560,7 +617,12 @@ export function WorkspacePage() {
           </div>
         ) : null}
 
-        <div className="relative min-h-0 flex-1 bg-black">
+        <div
+          className={cn(
+            'relative min-h-0 flex-1',
+            viewMode === 'chat' ? 'bg-background' : 'bg-black',
+          )}
+        >
           {token && mountedSessionIds.length > 0 ? (
             mountedSessionIds.map((id) => (
               <div
@@ -568,7 +630,10 @@ export function WorkspacePage() {
                 className={cn(
                   'absolute',
                   // Desktop: small inset when not immersive; mobile fills the pane.
-                  fullscreen ? 'inset-0' : 'inset-0 md:inset-2',
+                  // Chat mode always edge-to-edge on the light surface.
+                  viewMode === 'chat' || fullscreen
+                    ? 'inset-0'
+                    : 'inset-0 md:inset-2',
                   id === selectedSessionId
                     ? 'z-10 visible'
                     : 'z-0 invisible pointer-events-none',
@@ -580,6 +645,7 @@ export function WorkspacePage() {
                   token={token}
                   active={id === selectedSessionId}
                   layoutEpoch={layoutEpoch}
+                  viewMode={viewMode}
                   onStatus={(status) =>
                     setStatusById((prev) =>
                       prev[id] === status ? prev : { ...prev, [id]: status },
@@ -589,14 +655,29 @@ export function WorkspacePage() {
               </div>
             ))
           ) : (
-            <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center text-sm text-neutral-400">
+            <div
+              className={cn(
+                'flex h-full flex-col items-center justify-center gap-2 p-6 text-center text-sm',
+                viewMode === 'chat'
+                  ? 'text-muted-foreground'
+                  : 'text-neutral-400',
+              )}
+            >
               <TerminalIcon className="size-8 opacity-50" />
               <p>
                 Create a session for each task. Switching sessions keeps the
                 shell and scrollback — only Close tears it down.
               </p>
-              <p className="text-xs text-neutral-500 md:hidden">
-                Tip: use Fullscreen for a stable mobile shell (hides chrome).
+              <p
+                className={cn(
+                  'text-xs md:hidden',
+                  viewMode === 'chat'
+                    ? 'text-muted-foreground/80'
+                    : 'text-neutral-500',
+                )}
+              >
+                Tip: Stream view for readable mobile feeds; Classic for full
+                TTY. Preference applies to every session.
               </p>
             </div>
           )}
@@ -621,6 +702,7 @@ function SessionTerminal({
   token,
   active,
   layoutEpoch = 0,
+  viewMode = 'classic',
   onStatus,
 }: {
   sessionId: string
@@ -628,6 +710,8 @@ function SessionTerminal({
   active: boolean
   /** Parent bumps this on fullscreen / layout changes to force fit. */
   layoutEpoch?: number
+  /** Global presentation mode — does not remount WS/xterm. */
+  viewMode?: TerminalViewMode
   onStatus: (s: string) => void
 }) {
   const containerRef = useRef<HTMLDivElement>(null)
@@ -639,18 +723,122 @@ function SessionTerminal({
   const statusRef = useRef('idle')
   const onStatusRef = useRef(onStatus)
   const activeRef = useRef(active)
+  const viewModeRef = useRef(viewMode)
   onStatusRef.current = onStatus
   activeRef.current = active
+  viewModeRef.current = viewMode
+
+  /**
+   * Chronological chat timeline:
+   * - stream segments hold blocks parsed from a raw slice between user turns
+   * - user turns insert between segments so history reads top→bottom
+   */
+  type TimelineEntry =
+    | { type: 'stream'; id: string; raw: string; blocks: StreamBlock[] }
+    | { type: 'user'; id: string; text: string }
+
+  const [timeline, setTimeline] = useState<TimelineEntry[]>([
+    { type: 'stream', id: 'stream-0', raw: '', blocks: [] },
+  ])
+  const [liveStatus, setLiveStatus] = useState('idle')
+  const userTurnSeq = useRef(0)
+  const streamSegSeq = useRef(0)
 
   const setStatus = useCallback((s: string) => {
     statusRef.current = s
+    setLiveStatus(s)
     onStatusRef.current(s)
   }, [])
+
+  /** Mirror PTY text into the latest stream segment (presentation only). */
+  const pushStreamText = useCallback((chunk: string) => {
+    setTimeline((prev) => {
+      if (prev.length === 0) {
+        const parsed = appendStreamChunk('', chunk)
+        return [
+          {
+            type: 'stream',
+            id: 'stream-0',
+            raw: parsed.raw,
+            blocks: parsed.blocks,
+          },
+        ]
+      }
+      const next = [...prev]
+      const last = next[next.length - 1]!
+      if (last.type === 'stream') {
+        const parsed = appendStreamChunk(last.raw, chunk)
+        next[next.length - 1] = {
+          ...last,
+          raw: parsed.raw,
+          blocks: parsed.blocks,
+        }
+      } else {
+        streamSegSeq.current += 1
+        const parsed = appendStreamChunk('', chunk)
+        next.push({
+          type: 'stream',
+          id: `stream-${streamSegSeq.current}`,
+          raw: parsed.raw,
+          blocks: parsed.blocks,
+        })
+      }
+      return next
+    })
+  }, [])
+
+  const sendStdin = useCallback((data: string) => {
+    const ws = wsRef.current
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'stdin', data }))
+    }
+  }, [])
+
+  const onChatSend = useCallback(
+    (text: string) => {
+      userTurnSeq.current += 1
+      const id = `u-${sessionId}-${userTurnSeq.current}`
+      streamSegSeq.current += 1
+      setTimeline((prev) => [
+        ...prev,
+        { type: 'user', id, text },
+        {
+          type: 'stream',
+          id: `stream-${streamSegSeq.current}`,
+          raw: '',
+          blocks: [],
+        },
+      ])
+      // Line-oriented submit; Enter for most shells / agent CLIs.
+      sendStdin(text.endsWith('\n') || text.endsWith('\r') ? text : `${text}\r`)
+    },
+    [sessionId, sendStdin],
+  )
+
+  // Flatten timeline into ordered feed items for TerminalChatView.
+  const chatFeedItems = useMemo(() => {
+    const items: ChatFeedItem[] = []
+    for (const e of timeline) {
+      if (e.type === 'user') {
+        items.push({ type: 'user', id: e.id, text: e.text })
+      } else {
+        for (const b of e.blocks) {
+          items.push({
+            type: 'block',
+            id: `${e.id}:${b.id}`,
+            block: { ...b, id: `${e.id}:${b.id}` },
+          })
+        }
+      }
+    }
+    return items
+  }, [timeline])
 
   /**
    * Fit the terminal to its host and notify PTY only when cols/rows change.
    * Debounced by default — continuous visualViewport noise was causing
    * mobile fullscreen thrash (text redraw / “echo” look).
+   * In chat mode we still keep a reasonable cols/rows for the remote PTY.
    */
   const fitAndNotify = useCallback((opts?: { immediate?: boolean }) => {
     const run = () => {
@@ -661,6 +849,28 @@ function SessionTerminal({
       if (!fit || !term || !host) return
       // Hidden / zero-size panes: measuring them collapses the PTY.
       if (!activeRef.current) return
+
+      // Chat mode: host may be off-screen with zero size — use fixed geometry.
+      if (viewModeRef.current === 'chat') {
+        const cols = 100
+        const rows = 32
+        if (
+          cols !== lastSizeRef.current.cols ||
+          rows !== lastSizeRef.current.rows
+        ) {
+          lastSizeRef.current = { cols, rows }
+          try {
+            term.resize(cols, rows)
+          } catch {
+            /* ignore */
+          }
+          if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'resize', cols, rows }))
+          }
+        }
+        return
+      }
+
       if (host.clientWidth < 16 || host.clientHeight < 16) return
 
       try {
@@ -699,7 +909,10 @@ function SessionTerminal({
     fitTimerRef.current = window.setTimeout(run, 100)
   }, [])
 
-  // Connect once per mount; stay alive while this component is mounted.
+  // xterm mounts once; WebSocket auto-reconnects (mobile Safari/Chrome kill
+  // idle sockets when the screen locks or the tab is backgrounded).
+  // Server tmux session is durable — reconnect reattaches the same shell.
+  // Chat view is a second presentation of the same stream — no second channel.
   useEffect(() => {
     if (!containerRef.current) return
 
@@ -729,55 +942,153 @@ function SessionTerminal({
     termRef.current = term
     fitRef.current = fit
 
-    setStatus('connecting…')
-    const ws = new WebSocket(sessionWsUrl(sessionId, token))
-    wsRef.current = ws
+    let disposed = false
+    let socketGen = 0
+    let currentWs: WebSocket | null = null
+    let reconnectTimer = 0
+    let reconnectAttempt = 0
+    let hadReady = false
+    let pingTimer = 0
 
-    ws.onopen = () => {
-      setStatus('connected')
-      ws.send(
-        JSON.stringify({
-          type: 'resize',
-          cols: term.cols,
-          rows: term.rows,
-        }),
-      )
+    const clearReconnect = () => {
+      window.clearTimeout(reconnectTimer)
+      reconnectTimer = 0
     }
-    ws.onerror = () => setStatus('error')
-    ws.onclose = () => {
-      setStatus('closed')
-      term.writeln('\r\n\x1b[33m[session closed]\x1b[0m')
+
+    const clearPing = () => {
+      window.clearInterval(pingTimer)
+      pingTimer = 0
     }
-    ws.onmessage = (ev) => {
-      try {
-        const msg = JSON.parse(String(ev.data)) as {
-          type: string
-          data?: string
-          message?: string
+
+    const sendAppPing = () => {
+      const ws = currentWs
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        try {
+          ws.send(JSON.stringify({ type: 'ping' }))
+        } catch {
+          /* ignore */
         }
-        if (msg.type === 'stdout' && msg.data) term.write(msg.data)
-        else if (msg.type === 'error') {
-          setStatus('error')
-          term.writeln(`\r\n\x1b[31m${msg.message}\x1b[0m`)
-        } else if (msg.type === 'ready') setStatus('ssh ready')
-        // pong ignored
-      } catch {
-        term.write(String(ev.data))
       }
     }
 
+    const writeBoth = (data: string) => {
+      term.write(data)
+      pushStreamText(data)
+    }
+
+    const writelnBoth = (line: string) => {
+      term.writeln(line)
+      pushStreamText(`${line}\n`)
+    }
+
+    const connect = () => {
+      if (disposed) return
+      clearReconnect()
+      clearPing()
+
+      const gen = ++socketGen
+      // Drop previous socket without triggering its reconnect path.
+      if (currentWs) {
+        const prev = currentWs
+        currentWs = null
+        prev.onopen = null
+        prev.onclose = null
+        prev.onerror = null
+        prev.onmessage = null
+        try {
+          prev.close()
+        } catch {
+          /* ignore */
+        }
+      }
+
+      setStatus(hadReady ? 'reconnecting…' : 'connecting…')
+      const ws = new WebSocket(sessionWsUrl(sessionId, token))
+      currentWs = ws
+      wsRef.current = ws
+
+      ws.onopen = () => {
+        if (disposed || gen !== socketGen) return
+        reconnectAttempt = 0
+        setStatus('connected')
+        try {
+          ws.send(
+            JSON.stringify({
+              type: 'resize',
+              cols: term.cols,
+              rows: term.rows,
+            }),
+          )
+        } catch {
+          /* ignore */
+        }
+        // App-level ping as a second line of defence (proxies that ignore WS pings).
+        // Mobile throttles timers when backgrounded; server protocol pings still run.
+        pingTimer = window.setInterval(sendAppPing, 20_000)
+        sendAppPing()
+      }
+
+      ws.onerror = () => {
+        if (disposed || gen !== socketGen) return
+        // onclose will schedule reconnect; surface transient error state.
+        setStatus(hadReady ? 'reconnecting…' : 'error')
+      }
+
+      ws.onclose = () => {
+        if (disposed || gen !== socketGen) return
+        clearPing()
+        wsRef.current = null
+        if (currentWs === ws) currentWs = null
+
+        // Exponential backoff: 1s, 2s, 4s … cap 15s. Phone sleep often needs a few tries.
+        const delay = Math.min(1000 * 2 ** reconnectAttempt, 15_000)
+        reconnectAttempt += 1
+        setStatus('reconnecting…')
+        if (hadReady) {
+          writelnBoth(
+            `\x1b[33m[connection lost — reconnecting in ${Math.round(delay / 1000)}s…]\x1b[0m`,
+          )
+        }
+        reconnectTimer = window.setTimeout(() => {
+          if (!disposed && gen === socketGen) connect()
+        }, delay)
+      }
+
+      ws.onmessage = (ev) => {
+        if (disposed || gen !== socketGen) return
+        try {
+          const msg = JSON.parse(String(ev.data)) as {
+            type: string
+            data?: string
+            message?: string
+          }
+          if (msg.type === 'stdout' && msg.data) writeBoth(msg.data)
+          else if (msg.type === 'error') {
+            setStatus('error')
+            writelnBoth(`\x1b[31m${msg.message}\x1b[0m`)
+          } else if (msg.type === 'ready') {
+            const resume = hadReady
+            hadReady = true
+            setStatus('ssh ready')
+            if (resume) {
+              writelnBoth('\x1b[32m[reconnected — same tmux session]\x1b[0m')
+            }
+          }
+          // pong ignored
+        } catch {
+          writeBoth(String(ev.data))
+        }
+      }
+    }
+
+    connect()
+
     const dataDisp = term.onData((data) => {
-      if (ws.readyState === WebSocket.OPEN) {
+      const ws = currentWs
+      if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: 'stdin', data }))
       }
     })
-
-    // Application-level ping so proxies / idle paths do not kill the WS
-    const pingTimer = window.setInterval(() => {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: 'ping' }))
-      }
-    }, 25_000)
 
     // Prefer ResizeObserver on the host over window/visualViewport spam.
     let ro: ResizeObserver | null = null
@@ -796,14 +1107,58 @@ function SessionTerminal({
     const vv = window.visualViewport
     vv?.addEventListener('resize', onWindowResize)
 
+    // Mobile: screen unlock / tab focus / network back — reconnect immediately
+    // instead of waiting out a long backoff while the socket is already dead.
+    const wakeReconnect = () => {
+      if (disposed) return
+      const open =
+        currentWs &&
+        (currentWs.readyState === WebSocket.OPEN ||
+          currentWs.readyState === WebSocket.CONNECTING)
+      if (open) {
+        sendAppPing()
+        return
+      }
+      clearReconnect()
+      reconnectAttempt = 0
+      connect()
+    }
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') wakeReconnect()
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+    window.addEventListener('online', wakeReconnect)
+    window.addEventListener('pageshow', wakeReconnect)
+    // iOS sometimes freezes the page; resume is a strong reconnect signal.
+    document.addEventListener('resume', wakeReconnect as EventListener)
+
     return () => {
-      window.clearInterval(pingTimer)
+      disposed = true
+      socketGen += 1 // invalidate in-flight handlers
+      clearReconnect()
+      clearPing()
       window.clearTimeout(fitTimerRef.current)
       window.removeEventListener('resize', onWindowResize)
       vv?.removeEventListener('resize', onWindowResize)
+      document.removeEventListener('visibilitychange', onVisibility)
+      window.removeEventListener('online', wakeReconnect)
+      window.removeEventListener('pageshow', wakeReconnect)
+      document.removeEventListener('resume', wakeReconnect as EventListener)
       ro?.disconnect()
       dataDisp.dispose()
-      ws.close()
+      if (currentWs) {
+        const ws = currentWs
+        currentWs = null
+        ws.onopen = null
+        ws.onclose = null
+        ws.onerror = null
+        ws.onmessage = null
+        try {
+          ws.close()
+        } catch {
+          /* ignore */
+        }
+      }
       wsRef.current = null
       term.dispose()
       termRef.current = null
@@ -814,7 +1169,7 @@ function SessionTerminal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId, token])
 
-  // Layout change (fullscreen / vv size): refit only — do NOT re-focus.
+  // Layout change (fullscreen / vv size / view mode): refit only — do NOT re-focus.
   // Re-focusing on every fit re-opens the soft keyboard and restarts the jump cycle.
   useEffect(() => {
     if (!active) return
@@ -829,23 +1184,47 @@ function SessionTerminal({
       cancelAnimationFrame(id1)
       cancelAnimationFrame(id2)
     }
-  }, [active, layoutEpoch, fitAndNotify])
+  }, [active, layoutEpoch, viewMode, fitAndNotify])
 
-  // Focus once when this tab becomes active (user selected the session).
+  // Focus classic xterm once when this tab becomes active (user selected the session).
   useEffect(() => {
-    if (!active) return
+    if (!active || viewMode !== 'classic') return
     const t = window.setTimeout(() => termRef.current?.focus(), 30)
     return () => window.clearTimeout(t)
-  }, [active, sessionId])
+  }, [active, sessionId, viewMode])
+
+  const isChat = viewMode === 'chat'
 
   return (
-    <div
-      ref={containerRef}
-      className="ah-xterm-host h-full w-full"
-      // Stop page-level rubber-band; xterm viewport still scrolls inside.
-      onTouchMove={(e) => {
-        e.stopPropagation()
-      }}
-    />
+    <div className="relative h-full w-full">
+      {/*
+        Keep xterm mounted always so scrollback + WS stay alive when toggling.
+        Chat mode parks it off-screen (still receives writes).
+      */}
+      <div
+        ref={containerRef}
+        className={cn(
+          'ah-xterm-host',
+          isChat
+            ? 'pointer-events-none absolute h-px w-px overflow-hidden opacity-0'
+            : 'h-full w-full',
+        )}
+        aria-hidden={isChat}
+        // Stop page-level rubber-band; xterm viewport still scrolls inside.
+        onTouchMove={(e) => {
+          if (!isChat) e.stopPropagation()
+        }}
+      />
+      {isChat ? (
+        <TerminalChatView
+          items={chatFeedItems}
+          status={liveStatus}
+          active={active}
+          disabled={!active || liveStatus === 'connecting…'}
+          onSend={onChatSend}
+          className="absolute inset-0"
+        />
+      ) : null}
+    </div>
   )
 }
