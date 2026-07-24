@@ -55,6 +55,11 @@ func (s *Server) NewMux() http.Handler {
 	mux.HandleFunc("GET /health", s.handleHealth)
 	// Coolify often maps /api/health → strip → /health (already above)
 
+	// If the public domain is accidentally pointed at the API service (not web),
+	// bare / used to show a blank Go 404. Explain how to fix Coolify routing.
+	mux.HandleFunc("GET /{$}", s.handleAPIRoot)
+	mux.HandleFunc("GET /", s.handleAPIRoot)
+
 	mount("GET", "/hello", s.handleHello)
 	mount("POST", "/auth/login", s.handleLogin)
 	mount("GET", "/me", s.requireAuth(s.handleMe))
@@ -98,6 +103,16 @@ func NewMux() http.Handler {
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "service": "agent-hub"})
+}
+
+func (s *Server) handleAPIRoot(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{
+		"service": "agent-hub-api",
+		"ok":      true,
+		"hint":    "This is the API process, not the web UI. In Coolify attach your public domain ONLY to the web service (port 80). Leave the api service without a public domain — web proxies /api internally.",
+		"health":  "/health",
+		"login":   "POST /api/auth/login or POST /auth/login",
+	})
 }
 
 func (s *Server) handleHello(w http.ResponseWriter, r *http.Request) {

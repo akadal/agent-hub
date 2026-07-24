@@ -42,16 +42,20 @@ No specific PaaS or control panel is required. Coolify, Traefik, Caddy, nginx, c
 | Web | `web` | host **27342** → container **80** | SPA; Coolify must target **80** |
 | Dummy SSH | `ssh-target` | host **27343** → container **27343** | e2e (`root`/`targetpass`) |
 
-**Coolify checklist**
-- **web** domain: `https://your.host` → container port **80**
-- **api** domain (optional path): `https://your.host/api` → API container port **27341**  
-  Coolify **strips** `/api` before the request hits Go. The API therefore accepts both  
-  `/api/auth/login` (Compose/nginx) and `/auth/login` (Coolify strip).
-- Do **not** set `VITE_API_BASE_URL` to localhost
-- Credentials: `BOOTSTRAP_ADMIN_USERNAME` / `BOOTSTRAP_ADMIN_PASSWORD` re-applied every API restart
-- After env change: **rebuild/redeploy api + web**
-- Prefer leaving **ssh-target** without a public domain (internal only)
-- Data in **api** volume; terminal resume via **tmux** on remote host
+**Coolify checklist (critical)**
+
+| Service | Public domain | Port |
+|---------|---------------|------|
+| **web** | `https://your.host` **only this one** | **80** |
+| **api** | **none** (internal) | 27341 |
+| **ssh-target** | **none** (internal) | 27343 |
+
+If **both** web and api have the same domain (`agents.example`), Coolify may send **all** traffic to **api**. Then `/` is a Go 404 (no SPA), while `/api/hello` still works. Fix: **remove domain from api**, keep it only on **web**. Web nginx proxies `/api` → `api:27341` on the Docker network.
+
+- Do **not** set `VITE_API_BASE_URL` to localhost  
+- Credentials: `BOOTSTRAP_ADMIN_*` on **api** service, re-applied every restart  
+- After env change: restart/redeploy **api**  
+- ssh-target: no public domain
 
 **Remote channel:** SSH to registered IP/hostname. **Tailscale is not required** for this path (optional mesh later).
 
