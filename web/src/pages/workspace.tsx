@@ -34,6 +34,8 @@ import { cn } from '@/lib/utils'
  * are preserved (only visibility changes). Dispose on explicit Close.
  *
  * Fullscreen is layout-only (fixed overlay) — never remounts xterm/WS.
+ * On mobile, the overlay is pinned to visualViewport so soft keyboard /
+ * URL-bar changes do not thrash fit() and reflow the PTY.
  */
 export function WorkspacePage() {
   const { machineId: routeMachineId } = useParams<{ machineId?: string }>()
@@ -57,6 +59,11 @@ export function WorkspacePage() {
    */
   const [mountedSessionIds, setMountedSessionIds] = useState<string[]>([])
 
+  const shellRef = useRef<HTMLDivElement>(null)
+  const scheduleLayoutFit = useCallback(() => {
+    setLayoutEpoch((n) => n + 1)
+  }, [])
+
   const selectedMachineId = routeMachineId || machines[0]?.id || ''
   const selectedSessionId = search.get('session') || ''
 
@@ -72,27 +79,97 @@ export function WorkspacePage() {
   const toggleFullscreen = useCallback(() => {
     setFullscreen((v) => !v)
     // After CSS applies, panes need a fit pass (window resize may not fire).
-    setLayoutEpoch((n) => n + 1)
-  }, [])
+    scheduleLayoutFit()
+  }, [scheduleLayoutFit])
 
   // Escape exits immersive mode; lock body scroll while fullscreen.
+  // Pin shell to visualViewport (iOS keyboard / chrome) without React re-renders.
   useEffect(() => {
-    if (!fullscreen) return
-    const prevOverflow = document.body.style.overflow
-    document.body.style.overflow = 'hidden'
+    if (!fullscreen) {
+      const el = shellRef.current
+      if (el) {
+        el.style.top = ''
+        el.style.left = ''
+        el.style.width = ''
+        el.style.height = ''
+      }
+      return
+    }
+
+    const html = document.documentElement
+    const body = document.body
+    const prev = {
+      bodyOverflow: body.style.overflow,
+      bodyTouch: body.style.touchAction,
+      htmlOverflow: html.style.overflow,
+      htmlOverscroll: html.style.overscrollBehavior,
+    }
+    body.style.overflow = 'hidden'
+    body.style.touchAction = 'none'
+    html.style.overflow = 'hidden'
+    html.style.overscrollBehavior = 'none'
+
+    let fitTimer = 0
+    let lastW = 0
+    let lastH = 0
+
+    const pinToVisualViewport = () => {
+      const el = shellRef.current
+      const vv = window.visualViewport
+      if (!el) return
+
+      if (vv) {
+        el.style.top = `${Math.round(vv.offsetTop)}px`
+        el.style.left = `${Math.round(vv.offsetLeft)}px`
+        el.style.width = `${Math.round(vv.width)}px`
+        el.style.height = `${Math.round(vv.height)}px`
+      } else {
+        el.style.top = '0'
+        el.style.left = '0'
+        el.style.width = '100%'
+        el.style.height = '100dvh'
+      }
+
+      const w = vv?.width ?? window.innerWidth
+      const h = vv?.height ?? window.innerHeight
+      // Only refit when the *size* changes (ignore pure offset scroll from iOS).
+      if (Math.abs(w - lastW) >= 2 || Math.abs(h - lastH) >= 2) {
+        lastW = w
+        lastH = h
+        window.clearTimeout(fitTimer)
+        fitTimer = window.setTimeout(() => scheduleLayoutFit(), 80)
+      }
+    }
+
+    pinToVisualViewport()
+
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.preventDefault()
         setFullscreen(false)
-        setLayoutEpoch((n) => n + 1)
+        scheduleLayoutFit()
       }
     }
+
     window.addEventListener('keydown', onKey)
+    window.addEventListener('resize', pinToVisualViewport)
+    const vv = window.visualViewport
+    // scroll: reposition only (offsetTop changes); size gate above avoids fit spam
+    vv?.addEventListener('resize', pinToVisualViewport)
+    vv?.addEventListener('scroll', pinToVisualViewport)
+
     return () => {
-      document.body.style.overflow = prevOverflow
+      window.clearTimeout(fitTimer)
+      body.style.overflow = prev.bodyOverflow
+      body.style.touchAction = prev.bodyTouch
+      html.style.overflow = prev.htmlOverflow
+      html.style.overscrollBehavior = prev.htmlOverscroll
       window.removeEventListener('keydown', onKey)
+      window.removeEventListener('resize', pinToVisualViewport)
+      vv?.removeEventListener('resize', pinToVisualViewport)
+      vv?.removeEventListener('scroll', pinToVisualViewport)
     }
-  }, [fullscreen])
+  }, [fullscreen, scheduleLayoutFit])
 
   const refreshMachines = useCallback(async () => {
     if (!token) return
@@ -223,18 +300,25 @@ export function WorkspacePage() {
 
   return (
     <div
+      ref={shellRef}
       className={cn(
-        'flex flex-col gap-0 overflow-hidden bg-card md:flex-row',
+        'flex w-full flex-col gap-0 overflow-hidden bg-card md:flex-row',
         fullscreen
-          ? // Cover app shell + safe areas; pure layout — no remount.
-            'fixed inset-0 z-50 h-[100dvh] min-h-0 rounded-none border-0 bg-background pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]'
-          : 'h-[calc(100vh-3.5rem-2rem)] min-h-[420px] rounded-xl border border-border shadow-sm',
+          ? // Cover app shell; visualViewport pin applied via ref styles on mobile.
+            'fixed z-50 min-h-0 rounded-none border-0 bg-background pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]'
+          : 'h-full min-h-[280px] flex-1 rounded-none border-0 shadow-none md:min-h-[420px] md:rounded-xl md:border md:border-border md:shadow-sm',
       )}
+      // Non-JS fallback geometry when not yet pinned by the fullscreen effect.
+      style={
+        fullscreen
+          ? { top: 0, left: 0, width: '100%', height: '100dvh' }
+          : undefined
+      }
     >
       {/* Machines / sessions sidebar — hidden in immersive mode */}
       <aside
         className={cn(
-          'flex w-full shrink-0 flex-col border-b border-border md:w-72 md:border-b-0 md:border-r',
+          'flex max-h-[40vh] w-full shrink-0 flex-col border-b border-border md:max-h-none md:w-72 md:border-b-0 md:border-r',
           fullscreen && 'hidden',
         )}
       >
@@ -259,7 +343,7 @@ export function WorkspacePage() {
         <div className="px-3 py-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
           Machines
         </div>
-        <ScrollArea className="max-h-36 px-2 md:max-h-40">
+        <ScrollArea className="max-h-28 px-2 md:max-h-40">
           {machines.length === 0 ? (
             <p className="px-2 py-2 text-xs text-muted-foreground">
               No machines. Register one under Machines.
@@ -337,7 +421,7 @@ export function WorkspacePage() {
                     </button>
                     <button
                       type="button"
-                      className="rounded-md px-1.5 text-muted-foreground opacity-0 transition-opacity hover:bg-destructive/10 hover:text-destructive group-hover:opacity-100"
+                      className="rounded-md px-1.5 text-muted-foreground opacity-0 transition-opacity hover:bg-destructive/10 hover:text-destructive group-hover:opacity-100 max-md:opacity-100"
                       title="Close session"
                       onClick={() => void onCloseSession(s.id)}
                     >
@@ -357,7 +441,7 @@ export function WorkspacePage() {
             'flex shrink-0 items-center justify-between gap-2 border-b border-border',
             fullscreen
               ? 'bg-card/95 px-2 py-1.5 backdrop-blur supports-[backdrop-filter]:bg-card/80'
-              : 'flex-wrap px-4 py-2',
+              : 'flex-wrap px-3 py-2 md:px-4',
           )}
         >
           <div className="min-w-0 flex-1">
@@ -384,7 +468,7 @@ export function WorkspacePage() {
               title={fullscreen ? 'Exit fullscreen (Esc)' : 'Fullscreen terminal'}
               aria-label={fullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
               aria-pressed={fullscreen}
-              className={fullscreen ? 'size-9 touch-manipulation' : undefined}
+              className="touch-manipulation max-md:size-9"
             >
               {fullscreen ? (
                 <Minimize2 className="size-4" />
@@ -402,6 +486,7 @@ export function WorkspacePage() {
                   variant="outline"
                   disabled={!selectedMachineId || busy}
                   onClick={() => void onNewSession()}
+                  className="touch-manipulation"
                 >
                   <Plus className="size-4" />
                   <span className="hidden sm:inline">New session</span>
@@ -411,6 +496,7 @@ export function WorkspacePage() {
                     size="sm"
                     variant="ghost"
                     onClick={() => void onCloseSession(selectedSession.id)}
+                    className="touch-manipulation"
                   >
                     <Trash2 className="size-4" />
                     <span className="hidden sm:inline">Close</span>
@@ -474,19 +560,15 @@ export function WorkspacePage() {
           </div>
         ) : null}
 
-        <div
-          className={cn(
-            'relative min-h-0 flex-1 bg-black',
-            fullscreen ? 'p-0' : 'p-2',
-          )}
-        >
+        <div className="relative min-h-0 flex-1 bg-black">
           {token && mountedSessionIds.length > 0 ? (
             mountedSessionIds.map((id) => (
               <div
                 key={id}
                 className={cn(
                   'absolute',
-                  fullscreen ? 'inset-0' : 'inset-2',
+                  // Desktop: small inset when not immersive; mobile fills the pane.
+                  fullscreen ? 'inset-0' : 'inset-0 md:inset-2',
                   id === selectedSessionId
                     ? 'z-10 visible'
                     : 'z-0 invisible pointer-events-none',
@@ -513,12 +595,25 @@ export function WorkspacePage() {
                 Create a session for each task. Switching sessions keeps the
                 shell and scrollback — only Close tears it down.
               </p>
+              <p className="text-xs text-neutral-500 md:hidden">
+                Tip: use Fullscreen for a stable mobile shell (hides chrome).
+              </p>
             </div>
           )}
         </div>
       </section>
     </div>
   )
+}
+
+function prefersCoarsePointer(): boolean {
+  if (typeof window === 'undefined') return false
+  return window.matchMedia('(pointer: coarse)').matches
+}
+
+function isNarrowViewport(): boolean {
+  if (typeof window === 'undefined') return false
+  return window.matchMedia('(max-width: 640px)').matches
 }
 
 function SessionTerminal({
@@ -539,39 +634,80 @@ function SessionTerminal({
   const termRef = useRef<XTerm | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
+  const lastSizeRef = useRef({ cols: 0, rows: 0 })
+  const fitTimerRef = useRef(0)
   const statusRef = useRef('idle')
   const onStatusRef = useRef(onStatus)
+  const activeRef = useRef(active)
   onStatusRef.current = onStatus
+  activeRef.current = active
 
   const setStatus = useCallback((s: string) => {
     statusRef.current = s
     onStatusRef.current(s)
   }, [])
 
-  const fitAndNotify = useCallback(() => {
-    const fit = fitRef.current
-    const term = termRef.current
-    const ws = wsRef.current
-    if (!fit || !term) return
-    fit.fit()
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(
-        JSON.stringify({
-          type: 'resize',
-          cols: term.cols,
-          rows: term.rows,
-        }),
-      )
+  /**
+   * Fit the terminal to its host and notify PTY only when cols/rows change.
+   * Debounced by default — continuous visualViewport noise was causing
+   * mobile fullscreen thrash (text redraw / “echo” look).
+   */
+  const fitAndNotify = useCallback((opts?: { immediate?: boolean }) => {
+    const run = () => {
+      const fit = fitRef.current
+      const term = termRef.current
+      const ws = wsRef.current
+      const host = containerRef.current
+      if (!fit || !term || !host) return
+      // Hidden / zero-size panes: measuring them collapses the PTY.
+      if (!activeRef.current) return
+      if (host.clientWidth < 16 || host.clientHeight < 16) return
+
+      try {
+        fit.fit()
+      } catch {
+        return
+      }
+
+      const cols = term.cols
+      const rows = term.rows
+      if (cols < 2 || rows < 1) return
+      if (
+        cols === lastSizeRef.current.cols &&
+        rows === lastSizeRef.current.rows
+      ) {
+        return
+      }
+      lastSizeRef.current = { cols, rows }
+
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(
+          JSON.stringify({
+            type: 'resize',
+            cols,
+            rows,
+          }),
+        )
+      }
     }
+
+    window.clearTimeout(fitTimerRef.current)
+    if (opts?.immediate) {
+      run()
+      return
+    }
+    fitTimerRef.current = window.setTimeout(run, 100)
   }, [])
 
   // Connect once per mount; stay alive while this component is mounted.
   useEffect(() => {
     if (!containerRef.current) return
 
+    const mobile = prefersCoarsePointer() || isNarrowViewport()
     const term = new XTerm({
-      cursorBlink: true,
-      fontSize: 14,
+      cursorBlink: !mobile,
+      fontSize: mobile ? 12 : 14,
+      lineHeight: 1.15,
       fontFamily:
         'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
       theme: {
@@ -579,13 +715,17 @@ function SessionTerminal({
         foreground: '#e5e5e5',
         cursor: '#e5e5e5',
       },
-      // Slightly tighter on small screens after fit; scrollback kept.
-      scrollback: 5000,
+      scrollback: mobile ? 2000 : 5000,
+      // Avoid animated scroll redraw jank on soft devices.
+      smoothScrollDuration: 0,
+      // Slightly roomier touch targets for selection; still monospaced.
+      allowTransparency: false,
     })
     const fit = new FitAddon()
     term.loadAddon(fit)
     term.open(containerRef.current)
     fit.fit()
+    lastSizeRef.current = { cols: term.cols, rows: term.rows }
     termRef.current = term
     fitRef.current = fit
 
@@ -639,39 +779,50 @@ function SessionTerminal({
       }
     }, 25_000)
 
-    const onResize = () => fitAndNotify()
-    window.addEventListener('resize', onResize)
-    // Mobile soft keyboard: visualViewport shrinks without window.resize on some iOS versions.
+    // Prefer ResizeObserver on the host over window/visualViewport spam.
+    let ro: ResizeObserver | null = null
+    if (typeof ResizeObserver !== 'undefined' && containerRef.current) {
+      ro = new ResizeObserver(() => {
+        if (activeRef.current) fitAndNotify()
+      })
+      ro.observe(containerRef.current)
+    }
+
+    const onWindowResize = () => {
+      if (activeRef.current) fitAndNotify()
+    }
+    window.addEventListener('resize', onWindowResize)
+    // visualViewport resize only (NOT scroll) — keyboard open/close.
     const vv = window.visualViewport
-    vv?.addEventListener('resize', onResize)
-    vv?.addEventListener('scroll', onResize)
+    vv?.addEventListener('resize', onWindowResize)
 
     return () => {
       window.clearInterval(pingTimer)
-      window.removeEventListener('resize', onResize)
-      vv?.removeEventListener('resize', onResize)
-      vv?.removeEventListener('scroll', onResize)
+      window.clearTimeout(fitTimerRef.current)
+      window.removeEventListener('resize', onWindowResize)
+      vv?.removeEventListener('resize', onWindowResize)
+      ro?.disconnect()
       dataDisp.dispose()
       ws.close()
       wsRef.current = null
       term.dispose()
       termRef.current = null
       fitRef.current = null
+      lastSizeRef.current = { cols: 0, rows: 0 }
     }
     // Intentionally only sessionId + token: remount only when identity changes
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId, token])
 
-  // On tab focus or layout change (fullscreen): refit + focus; publish status
+  // Layout change (fullscreen / vv size): refit only — do NOT re-focus.
+  // Re-focusing on every fit re-opens the soft keyboard and restarts the jump cycle.
   useEffect(() => {
     if (!active) return
     onStatusRef.current(statusRef.current)
-    // Double rAF so fixed fullscreen CSS has applied before measuring.
     let id2 = 0
     const id1 = requestAnimationFrame(() => {
       id2 = requestAnimationFrame(() => {
-        fitAndNotify()
-        termRef.current?.focus()
+        fitAndNotify({ immediate: true })
       })
     })
     return () => {
@@ -680,5 +831,21 @@ function SessionTerminal({
     }
   }, [active, layoutEpoch, fitAndNotify])
 
-  return <div ref={containerRef} className="h-full w-full" />
+  // Focus once when this tab becomes active (user selected the session).
+  useEffect(() => {
+    if (!active) return
+    const t = window.setTimeout(() => termRef.current?.focus(), 30)
+    return () => window.clearTimeout(t)
+  }, [active, sessionId])
+
+  return (
+    <div
+      ref={containerRef}
+      className="ah-xterm-host h-full w-full"
+      // Stop page-level rubber-band; xterm viewport still scrolls inside.
+      onTouchMove={(e) => {
+        e.stopPropagation()
+      }}
+    />
+  )
 }

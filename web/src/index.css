@@ -98,12 +98,53 @@
   * {
     @apply border-border;
   }
+  html {
+    /* Avoid rubber-band scroll fighting the terminal on iOS. */
+    height: 100%;
+    overscroll-behavior: none;
+  }
   body {
     @apply bg-background text-foreground antialiased;
     margin: 0;
-    min-height: 100vh;
+    min-height: 100%;
+    min-height: 100dvh;
   }
   #root {
-    min-height: 100vh;
+    min-height: 100%;
+    min-height: 100dvh;
   }
+}
+
+/* xterm mobile / fullscreen stability */
+.ah-xterm-host {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+  touch-action: manipulation;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.ah-xterm-host .xterm {
+  height: 100%;
+  width: 100%;
+  padding: 0;
+}
+
+.ah-xterm-host .xterm-viewport {
+  /* Contain scroll so the page behind does not bounce. */
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+/*
+ * iOS Safari zooms focused inputs when font-size < 16px.
+ * xterm's helper textarea is tiny by default → viewport jump + fit thrash
+ * (feels like the terminal sliding / text re-drawing).
+ */
+.ah-xterm-host .xterm-helper-textarea {
+  font-size: 16px !important;
+  line-height: 1 !important;
 }

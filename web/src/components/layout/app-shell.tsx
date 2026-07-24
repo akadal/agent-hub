@@ -64,8 +64,11 @@ export function AppShell() {
         </header>
         <main
           className={cn(
-            'flex-1 overflow-auto',
-            isWorkspace ? 'p-2 md:p-3' : 'p-4 md:p-6',
+            'min-h-0 flex-1',
+            /* Workspace owns its own scroll/height; page bounce breaks xterm fit. */
+            isWorkspace
+              ? 'flex overflow-hidden p-0 md:p-3'
+              : 'overflow-auto p-4 md:p-6',
           )}
         >
           <Outlet />
