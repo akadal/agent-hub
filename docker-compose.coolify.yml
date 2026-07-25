@@ -1,0 +1,40 @@
+# Coolify / Linux VPS with Tailscale on the *host*
+#
+# Problem: bridge network (e.g. 10.0.10.0/24) cannot complete SSH to Tailscale
+# 100.x — handshake i/o timeout. Host tailnet (100.72.x) can.
+#
+# Fix: run the API with host networking so outbound SSH uses tailscale0.
+# Web stays on the compose network and reaches API via the docker bridge gateway.
+#
+# Coolify:
+#   - Use this file as an additional compose overlay, OR set Network Mode = host
+#     on the api service in the UI (same effect).
+#   - Domain only on **web** (port 80). Do not publish a public domain on api.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.coolify.yml up -d --build
+#
+# After deploy, from the VPS host you should see:
+#   docker exec <api> is N/A with host mode — check: ss -lntp | grep 27341
+#   curl -sS http://127.0.0.1:27341/health
+
+services:
+  api:
+    network_mode: host
+    # host mode ignores ports: — process binds HTTP_ADDR on the host
+    ports: !reset []
+    environment:
+      HTTP_ADDR: ":27341"
+      # Keep other env from base compose (JWT, bootstrap, DATA_DIR, …)
+    # Host network: no depends_on docker DNS for ssh-target; dummy target is
+    # optional on Coolify. Leave depends_on soft if Coolify injects it.
+    extra_hosts: !reset []
+
+  web:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      # Docker bridge → host-published API (host network listens on all interfaces)
+      API_UPSTREAM: host.docker.internal:27341
+    depends_on: !override
+      api:
+        condition: service_started

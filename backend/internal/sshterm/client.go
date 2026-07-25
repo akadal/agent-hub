@@ -106,8 +106,8 @@ func dialRaw(t Target, openDeadline time.Time) (*ssh.Client, net.Conn, error) {
 }
 
 // tailscaleHint appends actionable text when dialing CGNAT / Tailscale ranges
-// from a network that cannot complete the handshake (common: Docker Desktop
-// bridge → 100.x, or a Coolify host that is not on the tailnet).
+// from a network that cannot complete the handshake (common: Docker bridge
+// 10.x/172.x → 100.x even when the *host* has Tailscale).
 func tailscaleHint(address string) string {
 	ip := net.ParseIP(address)
 	if ip == nil {
@@ -116,9 +116,9 @@ func tailscaleHint(address string) string {
 	// Tailscale / CGNAT: 100.64.0.0/10
 	if ip4 := ip.To4(); ip4 != nil {
 		if ip4[0] == 100 && ip4[1] >= 64 && ip4[1] <= 127 {
-			return " (Tailscale IP: the Agent Hub *API process* must route to the tailnet — " +
-				"Docker bridge often cannot. Run API on the host with scripts/run-api-host.sh " +
-				"and docker-compose.host-api.yml, or install Tailscale on the API host)"
+			return " (Tailscale 100.x: API container is on Docker bridge, not the host tailnet. " +
+				"Coolify/VPS: deploy with docker-compose.coolify.yml or set api network_mode=host. " +
+				"Mac Docker Desktop: scripts/run-api-host.sh + docker-compose.host-api.yml)"
 		}
 	}
 	return ""

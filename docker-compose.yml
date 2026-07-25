@@ -9,9 +9,11 @@
 #   Dummy SSH: localhost:27343 → container 27343 (root / targetpass)
 #   From API container, register address "ssh-target" port 27343.
 #
-# Tailscale (100.x) machines on Docker Desktop macOS:
-#   Bridge containers often fail SSH handshake to 100.x (i/o timeout).
-#   Use host API instead:
+# Tailscale (100.x) SSH:
+#   Bridge containers (10.x/172.x) cannot use the host tailnet → handshake timeout.
+#   Coolify/Linux VPS (Tailscale on host):
+#     docker compose -f docker-compose.yml -f docker-compose.coolify.yml up -d --build
+#   Docker Desktop macOS:
 #     docker compose -f docker-compose.yml -f docker-compose.host-api.yml up -d --build web ssh-target
 #     ./scripts/run-api-host.sh
 #

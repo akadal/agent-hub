@@ -63,9 +63,28 @@ If **both** web and api have the same domain (`agents.example`), Coolify may sen
 
 | Where API runs | SSH to `100.x` |
 |----------------|----------------|
-| Compose `api` container (Docker Desktop macOS) | Often **broken** — handshake `i/o timeout` from bridge IP |
-| API on host (`./scripts/run-api-host.sh`) | **Works** if host is on the tailnet |
-| Coolify / VPS | Works only if **that host** has Tailscale (or use LAN/public SSH) |
+| Bridge container (`10.0.10.x` / `172.x`) | **Broken** — `handshake … i/o timeout` even if VPS has Tailscale |
+| API **host network** (Coolify) | **Works** — outbound via host `tailscale0` (e.g. `100.72.x`) |
+| API on host process | **Works** if host is on the tailnet |
+| Docker Desktop macOS bridge | Often broken — use `docker-compose.host-api.yml` |
+
+**Symptom (Coolify):**  
+`ssh dial: handshake failed: read tcp 10.0.10.4:…->100.118.x.x:22: i/o timeout`  
+Host has Tailscale and `tailscale status` shows both VPS + target **active**, but the **container** is not on the tailnet.
+
+**Coolify fix (Linux VPS + Tailscale on host):**
+
+1. Install/login Tailscale on the **VPS** (not only on your laptop). Confirm: `tailscale status` lists target machines.
+2. Deploy with host-network overlay so API uses the host stack:
+
+```bash
+# In the Coolify compose / git deploy, use both files:
+docker compose -f docker-compose.yml -f docker-compose.coolify.yml up -d --build
+```
+
+Or in Coolify UI for the **api** service only: **Network mode = host** (same idea). Keep domain only on **web**; set web `API_UPSTREAM=host.docker.internal:27341` (or the host gateway).
+
+3. Redeploy. From VPS: `curl -sS http://127.0.0.1:27341/health` and open a terminal to a `100.x` machine.
 
 **Local Mac + Tailscale machines:**
 
@@ -75,7 +94,7 @@ docker compose -f docker-compose.yml -f docker-compose.host-api.yml up -d --buil
 # UI: http://localhost:27342  (or WEB_PORT)
 ```
 
-If you see `read tcp 10.x/172.x→100.x:22: i/o timeout`, the API is still inside Docker without a tailnet path — switch to host API (above) or put Tailscale on the API host.
+**Why it “worked yesterday”:** older deploy may have used host networking / different Coolify network settings; a rebuild onto a pure bridge network (`10.0.10.0/24`) drops Tailscale routing for the API container.
 
 **Optional — Import from Tailscale (Machines UI)**
 
