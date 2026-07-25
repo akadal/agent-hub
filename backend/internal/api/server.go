@@ -96,6 +96,7 @@ func (s *Server) NewMux() http.Handler {
 	mount("GET", "/machines/{id}", s.requireAuth(s.handleGetMachine))
 	mount("DELETE", "/machines/{id}", s.requireAuth(s.handleDeleteMachine))
 	mount("POST", "/machines/{id}/exec", s.requireAuth(s.handleMachineExec))
+	mount("POST", "/machines/{id}/check", s.requireAuth(s.handleMachineCheck))
 
 	mount("GET", "/machines/{id}/terminals", s.requireAuth(s.handleListTerminals))
 	mount("POST", "/machines/{id}/terminals", s.requireAuth(s.handleCreateTerminal))
@@ -521,6 +522,35 @@ func (s *Server) handleDeleteMachine(w http.ResponseWriter, r *http.Request) {
 
 type execRequest struct {
 	Command string `json:"command"`
+}
+
+// handleMachineCheck answers "can the hub reach this machine, and if not why"
+// without opening a terminal. Before this, the only way to find out was to open
+// a session and stare at a black xterm until something timed out.
+func (s *Server) handleMachineCheck(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	m, err := s.Store.GetMachine(id)
+	if err != nil || !s.canAccessMachine(r, m) {
+		writeErr(w, http.StatusNotFound, "machine not found")
+		return
+	}
+	res := sshterm.Check(sshterm.Target{
+		Address:       m.Address,
+		Port:          m.Port,
+		User:          m.SSHUser,
+		Password:      m.SSHPassword,
+		PrivateKey:    m.SSHPrivateKey,
+		KeyPassphrase: m.SSHKeyPassphrase,
+	})
+	if res.OK {
+		s.logf("machineCheck ok %s@%s:%d in %dms", m.SSHUser, m.Address, m.Port, res.ElapsedMS)
+	} else {
+		s.logf("machineCheck failed %s@%s:%d in %dms: %s — %s",
+			m.SSHUser, m.Address, m.Port, res.ElapsedMS, res.Failure.Kind, res.Failure.Message)
+	}
+	// Always 200: the check ran successfully even when the machine is broken.
+	// The body carries the verdict.
+	writeJSON(w, http.StatusOK, res)
 }
 
 func (s *Server) handleMachineExec(w http.ResponseWriter, r *http.Request) {

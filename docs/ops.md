@@ -359,8 +359,12 @@ If `ufw` is active, tailnet traffic is usually already allowed via a
 4. Is tmux/session bridge healthy on that machine?
 5. Check audit log for recent access and errors (when M5 ships).
 
-**Read the terminal's error frame first.** A failed open reports a classified
-cause; each one has a different fix:
+**Hit “Test connection” on the Machines page first.** It dials and authenticates
+the same way the terminal bridge does, then reports the classified cause and its
+fix without opening a session (`POST /api/machines/{id}/check`). The terminal's
+error frame carries the same information if a session is already open.
+
+Each cause has a different fix:
 
 | `kind` | Meaning | Fix |
 |--------|---------|-----|

@@ -6,11 +6,13 @@ import { Button } from '@/components/ui/button'
 import {
   createMachine,
   deleteMachine,
+  checkMachine,
   execOnMachine,
   getTailscaleStatus,
   importFromTailscale,
   listMachines,
   type Machine,
+  type MachineCheck,
   type TailscaleStatus,
 } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
@@ -29,6 +31,8 @@ export function MachinesPage() {
   const [sshKeyPassphrase, setSshKeyPassphrase] = useState('')
   const [busy, setBusy] = useState(false)
   const [execOut, setExecOut] = useState<string | null>(null)
+  // Per-machine preflight verdicts, keyed by machine id.
+  const [checks, setChecks] = useState<Record<string, MachineCheck | 'running'>>({})
 
   // Tailscale import panel
   const [tsOpen, setTsOpen] = useState(false)
@@ -133,6 +137,28 @@ export function MachinesPage() {
     }
     await deleteMachine(token, id)
     await refresh()
+  }
+
+  async function onCheck(id: string) {
+    if (!token) return
+    setChecks((c) => ({ ...c, [id]: 'running' }))
+    try {
+      const result = await checkMachine(token, id)
+      setChecks((c) => ({ ...c, [id]: result }))
+    } catch (e) {
+      setChecks((c) => ({
+        ...c,
+        [id]: {
+          ok: false,
+          elapsed_ms: 0,
+          failure: {
+            kind: 'request_failed',
+            message: e instanceof Error ? e.message : String(e),
+            retryable: true,
+          },
+        },
+      }))
+    }
   }
 
   async function onProbe(id: string) {
@@ -439,7 +465,16 @@ TAILSCALE_TAILNET=-`}
                     (and install <code className="text-[10px]">tmux</code>).
                   </p>
                 </div>
+                {checks[m.id] ? <CheckVerdict result={checks[m.id]} /> : null}
                 <div className="flex flex-wrap gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => void onCheck(m.id)}
+                    disabled={checks[m.id] === 'running'}
+                  >
+                    {checks[m.id] === 'running' ? 'Testing…' : 'Test connection'}
+                  </Button>
                   <Button
                     variant="outline"
                     size="sm"
@@ -501,5 +536,59 @@ function Field({
         required={required}
       />
     </label>
+  )
+}
+
+/**
+ * Renders a preflight verdict. On failure it shows the classified cause and the
+ * concrete fix — the point of the whole exercise is that a broken machine
+ * explains itself here instead of in a black terminal twenty seconds later.
+ */
+function CheckVerdict({ result }: { result: MachineCheck | 'running' }) {
+  if (result === 'running') {
+    return (
+      <p className="mt-2 text-xs text-muted-foreground">Testing connection…</p>
+    )
+  }
+  if (result.ok) {
+    return (
+      <p className="mt-2 text-xs text-emerald-600 dark:text-emerald-400">
+        Reachable — SSH authenticated in {result.elapsed_ms} ms.
+      </p>
+    )
+  }
+  const f = result.failure
+  return (
+    <div
+      role="alert"
+      className="mt-2 space-y-1 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs"
+    >
+      <p className="font-medium text-destructive">
+        {f?.message ?? 'Connection failed'}
+        {f?.kind ? (
+          <span className="ml-1 font-mono font-normal opacity-70">
+            [{f.kind}]
+          </span>
+        ) : null}
+      </p>
+      {f?.approval_url ? (
+        <p>
+          <a
+            href={f.approval_url}
+            target="_blank"
+            rel="noreferrer noopener"
+            className="underline"
+          >
+            Approve this login
+          </a>
+        </p>
+      ) : null}
+      {f?.hint ? <p className="text-muted-foreground">{f.hint}</p> : null}
+      {f && !f.retryable ? (
+        <p className="text-muted-foreground">
+          Retrying will not help — apply the fix above first.
+        </p>
+      ) : null}
+    </div>
   )
 }

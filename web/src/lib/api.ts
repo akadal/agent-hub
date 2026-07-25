@@ -425,6 +425,36 @@ export async function execOnMachine(
   return (await res.json()) as ExecResult
 }
 
+/** Classified outcome of a machine preflight (mirrors sshterm.CheckResult). */
+export type MachineCheck = {
+  ok: boolean
+  elapsed_ms: number
+  failure?: {
+    kind: string
+    message: string
+    hint?: string
+    approval_url?: string
+    retryable: boolean
+  }
+}
+
+/**
+ * Ask the API whether it can reach this machine. Answers the question without
+ * opening a terminal, so a broken host is diagnosed from the Machines page
+ * instead of by staring at a black xterm.
+ */
+export async function checkMachine(
+  token: string,
+  id: string,
+): Promise<MachineCheck> {
+  const res = await fetch(`${API_BASE}/api/machines/${id}/check`, {
+    method: 'POST',
+    headers: authHeaders(token),
+  })
+  if (!res.ok) throw new Error(await parseError(res))
+  return (await res.json()) as MachineCheck
+}
+
 export async function execOnTerminal(
   token: string,
   id: string,
