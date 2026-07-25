@@ -116,8 +116,15 @@ export function MachinesPage() {
     }
   }
 
-  async function onDelete(id: string) {
+  async function onDelete(id: string, name: string) {
     if (!token) return
+    if (
+      !window.confirm(
+        `Delete machine “${name}”? Active sessions on this host will be lost and this cannot be undone.`,
+      )
+    ) {
+      return
+    }
     await deleteMachine(token, id)
     await refresh()
   }
@@ -411,8 +418,8 @@ TAILSCALE_TAILNET=-`}
                   <Button
                     variant="ghost"
                     size="sm"
-                    onClick={() => void onDelete(m.id)}
-                    aria-label="Delete machine"
+                    onClick={() => void onDelete(m.id, m.name)}
+                    aria-label={`Delete machine ${m.name}`}
                   >
                     <Trash2 className="size-4" />
                   </Button>

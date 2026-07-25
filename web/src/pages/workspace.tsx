@@ -314,6 +314,15 @@ export function WorkspacePage() {
 
   async function onCloseSession(id: string) {
     if (!token) return
+    const session = sessions.find((s) => s.id === id)
+    const label = session?.name?.trim() || 'this session'
+    if (
+      !window.confirm(
+        `Close “${label}”? The remote shell will be terminated and this cannot be undone.`,
+      )
+    ) {
+      return
+    }
     // Tear down live pane first so WS/SSH close, then delete server record
     unmountSession(id)
     try {
