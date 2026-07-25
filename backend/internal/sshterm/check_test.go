@@ -2,6 +2,7 @@ package sshterm
 
 import (
 	"testing"
+	"time"
 )
 
 func TestCheckReportsUnreachableWithoutHangingOnPTY(t *testing.T) {
@@ -55,4 +56,20 @@ func contains(haystack, needle string) bool {
 			}
 			return false
 		}()
+}
+
+// The preflight must honour its own budget end to end. A black-holed address
+// makes the TCP connect hang, and if the dial used its own longer timeout the
+// deadline the caller picked would be a fiction.
+func TestCheckHonoursItsBudgetOnADeadDial(t *testing.T) {
+	start := time.Now()
+	res := Check(Target{Address: "203.0.113.1", Port: 22, User: "ops", Password: "x"})
+	elapsed := time.Since(start)
+
+	if res.OK {
+		t.Fatal("black-holed address must not report OK")
+	}
+	if elapsed > checkTimeout+2*time.Second {
+		t.Fatalf("check ran %s, budget is %s — the dial is escaping the deadline", elapsed, checkTimeout)
+	}
 }

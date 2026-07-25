@@ -148,7 +148,17 @@ func dialRaw(t Target, openDeadline time.Time) (*ssh.Client, net.Conn, error) {
 		return nil, nil, &OpenError{Failure: Diagnose(StageAuthSetup, err, tr, t), Err: err}
 	}
 
-	raw, err := net.DialTimeout("tcp", addr, dialTimeout)
+	// The TCP connect must fit inside the caller's overall budget. Without this
+	// a 10s preflight against a black-holed address still takes the full 12s
+	// dial timeout, so the deadline the caller chose would not be the deadline
+	// it got.
+	connectTimeout := dialTimeout
+	if !openDeadline.IsZero() {
+		if remaining := time.Until(openDeadline); remaining < connectTimeout {
+			connectTimeout = remaining
+		}
+	}
+	raw, err := net.DialTimeout("tcp", addr, connectTimeout)
 	if err != nil {
 		return nil, nil, &OpenError{Failure: Diagnose(StageDial, err, tr, t), Err: err}
 	}

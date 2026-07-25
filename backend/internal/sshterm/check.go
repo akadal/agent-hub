@@ -5,9 +5,13 @@ import (
 	"time"
 )
 
-// checkTimeout bounds a preflight. Shorter than openTimeout: a check is a
-// question, not a session, and the operator is waiting on the answer.
-const checkTimeout = 15 * time.Second
+// checkTimeout bounds a preflight. Deliberately much shorter than openTimeout:
+// a check is a question with someone waiting on the answer, not a session.
+// Real handshakes over a mesh land in well under a second even via a DERP
+// relay, so anything still unfinished at 10s is stalled, not slow — and the
+// classic stall (Tailscale SSH holding a session for approval) would otherwise
+// keep the button silent long enough to look broken.
+const checkTimeout = 10 * time.Second
 
 // CheckResult is the outcome of a preflight connection test.
 type CheckResult struct {

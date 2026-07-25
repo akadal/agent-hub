@@ -17,6 +17,17 @@ import {
 } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 
+/** A check is either in flight (with its start time) or a finished verdict. */
+type CheckState = MachineCheck | { running: true; startedAt: number }
+
+function isRunning(c: CheckState | undefined): c is { running: true; startedAt: number } {
+  return !!c && 'running' in c
+}
+
+function elapsedSeconds(c: CheckState | undefined): number {
+  return isRunning(c) ? Math.max(0, Math.round((Date.now() - c.startedAt) / 1000)) : 0
+}
+
 export function MachinesPage() {
   const { token } = useAuth()
   const [machines, setMachines] = useState<Machine[]>([])
@@ -32,7 +43,11 @@ export function MachinesPage() {
   const [busy, setBusy] = useState(false)
   const [execOut, setExecOut] = useState<string | null>(null)
   // Per-machine preflight verdicts, keyed by machine id.
-  const [checks, setChecks] = useState<Record<string, MachineCheck | 'running'>>({})
+  const [checks, setChecks] = useState<Record<string, CheckState>>({})
+  // Ticks while any check is in flight so the elapsed counter advances. A
+  // stalled SSH handshake takes seconds to give up, and a button that shows
+  // nothing for that long is indistinguishable from a broken one.
+  const [, setTick] = useState(0)
 
   // Tailscale import panel
   const [tsOpen, setTsOpen] = useState(false)
@@ -44,6 +59,13 @@ export function MachinesPage() {
   const [tsOnlineOnly, setTsOnlineOnly] = useState(true)
   const [tsBusy, setTsBusy] = useState(false)
   const [tsMsg, setTsMsg] = useState<string | null>(null)
+
+  useEffect(() => {
+    const running = Object.values(checks).some(isRunning)
+    if (!running) return
+    const id = window.setInterval(() => setTick((n) => n + 1), 250)
+    return () => window.clearInterval(id)
+  }, [checks])
 
   const refresh = useCallback(async () => {
     if (!token) return
@@ -141,7 +163,7 @@ export function MachinesPage() {
 
   async function onCheck(id: string) {
     if (!token) return
-    setChecks((c) => ({ ...c, [id]: 'running' }))
+    setChecks((c) => ({ ...c, [id]: { running: true, startedAt: Date.now() } }))
     try {
       const result = await checkMachine(token, id)
       setChecks((c) => ({ ...c, [id]: result }))
@@ -471,9 +493,11 @@ TAILSCALE_TAILNET=-`}
                     variant="outline"
                     size="sm"
                     onClick={() => void onCheck(m.id)}
-                    disabled={checks[m.id] === 'running'}
+                    disabled={isRunning(checks[m.id])}
                   >
-                    {checks[m.id] === 'running' ? 'Testing…' : 'Test connection'}
+                    {isRunning(checks[m.id])
+                      ? `Testing… ${elapsedSeconds(checks[m.id])}s`
+                      : 'Test connection'}
                   </Button>
                   <Button
                     variant="outline"
@@ -544,10 +568,16 @@ function Field({
  * concrete fix — the point of the whole exercise is that a broken machine
  * explains itself here instead of in a black terminal twenty seconds later.
  */
-function CheckVerdict({ result }: { result: MachineCheck | 'running' }) {
-  if (result === 'running') {
+function CheckVerdict({ result }: { result: CheckState }) {
+  if (isRunning(result)) {
+    const secs = elapsedSeconds(result)
     return (
-      <p className="mt-2 text-xs text-muted-foreground">Testing connection…</p>
+      <p className="mt-2 text-xs text-muted-foreground">
+        Testing connection… {secs}s
+        {secs >= 3
+          ? ' — a handshake this slow usually means the remote accepted the connection but never finished authenticating.'
+          : ''}
+      </p>
     )
   }
   if (result.ok) {

@@ -31,3 +31,6 @@ vendor/
 # Logs
 *.log
 logs/
+
+# Local agent tooling
+.claude/
