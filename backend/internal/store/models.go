@@ -1,6 +1,9 @@
 package store
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // User is a local account that can authenticate with username/password.
 // PasswordHash is persisted in the store file; API layers must not expose it.
@@ -34,35 +37,56 @@ func (u User) Public() UserPublic {
 // SSHPassword is persisted for the SSH bridge; Public() omits it.
 // OwnerUserID scopes the machine to the user who registered it.
 type Machine struct {
-	ID          string    `json:"id"`
-	OwnerUserID string    `json:"owner_user_id"`
-	Name        string    `json:"name"`
-	Address     string    `json:"address"`
-	Port        int       `json:"port"`
-	SSHUser     string    `json:"ssh_user"`
-	SSHPassword string    `json:"ssh_password"`
-	CreatedAt   time.Time `json:"created_at"`
+	ID          string `json:"id"`
+	OwnerUserID string `json:"owner_user_id"`
+	Name        string `json:"name"`
+	Address     string `json:"address"`
+	Port        int    `json:"port"`
+	SSHUser     string `json:"ssh_user"`
+	SSHPassword string `json:"ssh_password"`
+	// SSHPrivateKey is a PEM key used in preference to the password. Hardened
+	// targets set PasswordAuthentication=no, where a key is the only way in.
+	SSHPrivateKey string `json:"ssh_private_key,omitempty"`
+	// SSHKeyPassphrase decrypts SSHPrivateKey when it is encrypted.
+	SSHKeyPassphrase string    `json:"ssh_key_passphrase,omitempty"`
+	CreatedAt        time.Time `json:"created_at"`
+}
+
+// MachineSpec is the caller-supplied part of a machine registration. It is a
+// struct rather than a parameter list because the credential set keeps growing.
+type MachineSpec struct {
+	Name             string
+	Address          string
+	Port             int
+	SSHUser          string
+	SSHPassword      string
+	SSHPrivateKey    string
+	SSHKeyPassphrase string
 }
 
 // MachinePublic is the API-safe view of a machine (no password).
 type MachinePublic struct {
-	ID        string    `json:"id"`
-	Name      string    `json:"name"`
-	Address   string    `json:"address"`
-	Port      int       `json:"port"`
-	SSHUser   string    `json:"ssh_user"`
-	CreatedAt time.Time `json:"created_at"`
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Address string `json:"address"`
+	Port    int    `json:"port"`
+	SSHUser string `json:"ssh_user"`
+	// HasPrivateKey tells the UI which credential is in play without ever
+	// sending the key itself.
+	HasPrivateKey bool      `json:"has_private_key"`
+	CreatedAt     time.Time `json:"created_at"`
 }
 
 // Public returns an API-safe machine without secrets.
 func (m Machine) Public() MachinePublic {
 	return MachinePublic{
-		ID:        m.ID,
-		Name:      m.Name,
-		Address:   m.Address,
-		Port:      m.Port,
-		SSHUser:   m.SSHUser,
-		CreatedAt: m.CreatedAt,
+		ID:            m.ID,
+		Name:          m.Name,
+		Address:       m.Address,
+		Port:          m.Port,
+		SSHUser:       m.SSHUser,
+		HasPrivateKey: strings.TrimSpace(m.SSHPrivateKey) != "",
+		CreatedAt:     m.CreatedAt,
 	}
 }
 

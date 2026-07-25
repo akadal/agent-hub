@@ -31,10 +31,19 @@ func main() {
 		os.Exit(2)
 	}
 	t := sshterm.Target{
-		Address:  os.Args[1],
-		Port:     port,
-		User:     os.Args[3],
-		Password: os.Getenv("AGENT_HUB_SSH_PASSWORD"),
+		Address:       os.Args[1],
+		Port:          port,
+		User:          os.Args[3],
+		Password:      os.Getenv("AGENT_HUB_SSH_PASSWORD"),
+		KeyPassphrase: os.Getenv("AGENT_HUB_SSH_KEY_PASSPHRASE"),
+	}
+	if path := os.Getenv("AGENT_HUB_SSH_KEY_FILE"); path != "" {
+		key, err := os.ReadFile(path)
+		if err != nil {
+			fmt.Println("cannot read key file:", err)
+			os.Exit(2)
+		}
+		t.PrivateKey = string(key)
 	}
 
 	sess, err := sshterm.OpenSession(t, "", 80, 24)

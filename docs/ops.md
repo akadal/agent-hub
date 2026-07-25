@@ -303,6 +303,52 @@ ssh -o BatchMode=yes <user>@<tailnet-ip> 'echo ok'
 > the password is inert; a login that starts working after a password change was
 > re-approved in a browser, not authenticated by the password.
 
+### Alternative: key auth on a second port (no ACL edit)
+
+Tailscale intercepts **only port 22** on the tailnet address. Any other port
+reaches the host's own OpenSSH, so exposing sshd on a second port gives the hub
+a path that does not depend on the tailnet ACL at all. Use this when you cannot
+edit the policy file, or want the hub independent of `checkPeriod` for good.
+
+It also covers the common case where the target sets `PasswordAuthentication no`
+— there, a key is the only credential that can ever work.
+
+On the target (Ubuntu 24.04 socket-activates sshd, so the port must be set on
+the **socket unit** — `Port` in `sshd_config` alone is ignored):
+
+```bash
+# 1. authorize the hub's public key
+mkdir -p ~/.ssh && chmod 700 ~/.ssh
+printf '%s\n' "ssh-ed25519 AAAA... agent-hub@hub" >> ~/.ssh/authorized_keys
+chmod 600 ~/.ssh/authorized_keys
+
+# 2. add the port (keep 22 so your own Tailscale SSH keeps working)
+sudo tee /etc/systemd/system/ssh.socket.d/10-agent-hub.conf >/dev/null <<'EOF'
+[Socket]
+ListenStream=
+ListenStream=22
+ListenStream=2222
+EOF
+sudo systemctl daemon-reload && sudo systemctl restart ssh.socket
+
+# 3. verify BOTH ports are listening before you log out
+ss -lnt | grep -E ':(22|2222)\b'
+```
+
+Then register the machine with **port 2222** and paste the private key into the
+**SSH private key** field. The key is preferred over the password whenever both
+are present.
+
+Confirm the second port really is OpenSSH and not Tailscale:
+
+```bash
+ssh -p 2222 -v <user>@<tailnet-ip> exit 2>&1 | grep "remote software version"
+# expect OpenSSH_x, not Tailscale
+```
+
+If `ufw` is active, tailnet traffic is usually already allowed via a
+`Anywhere on tailscale0 ALLOW` rule — check before assuming you need a new one.
+
 ---
 
 ## 7. Incident checklist (draft)
@@ -321,7 +367,8 @@ cause; each one has a different fix:
 | `tailscale_check_pending` | Tailscale SSH is holding the session for browser approval | §6b — add an `accept` ACL rule for the hub node |
 | `tailscale_denied` | No ACL rule grants hub → target for that login | §6b — add/extend the `ssh` rule |
 | `tailnet_routing` | The API process cannot route to 100.x | Run the API with `network_mode: host` (§2) |
-| `auth_failed` | Ordinary sshd rejected the credentials | Fix the machine's SSH user/password |
+| `auth_failed` | Ordinary sshd rejected the credentials | Fix the machine's SSH user/password, or add a key (§6b) |
+| `bad_private_key` | The stored PEM key does not parse | Re-paste the full key incl. BEGIN/END; set the passphrase |
 | `unreachable` | Nothing accepted TCP | Host down, wrong port, or firewall |
 | `timeout` | Connected, then the remote stopped responding | Loaded or suspended host |
 

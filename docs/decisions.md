@@ -90,6 +90,18 @@ Lightweight log of decisions that affect structure. Full product requirements st
 
 ---
 
+## ADR-008: SSH private key as a first-class machine credential
+
+| Field | Value |
+|-------|--------|
+| Status | accepted |
+| Date | 2026-07-25 |
+| Context | ADR-005 bootstrapped the SSH channel with a user + password. That leaves the hub unable to reach two common targets: hosts hardened with `PasswordAuthentication no` (where no password can ever succeed), and Tailscale SSH hosts under an `"action": "check"` ACL (where authentication is a human-gated browser approval the hub cannot perform). Both were hit on the same target, so password-only auth had no path in at all. |
+| Decision | A machine may carry an **optional PEM private key** (plus passphrase) alongside the password, offered **before** the password because a hardened sshd accepts nothing else. A key that fails to parse is a hard error raised **before any network I/O**, classified `bad_private_key` — never a silent fallback to a password the host will refuse. `Machine.Public()` exposes only `has_private_key`; the key itself never leaves the API. `CreateMachine` takes a `MachineSpec` struct rather than a growing parameter list. Because Tailscale intercepts only port 22, publishing sshd on a second port gives a key-authenticated path that is independent of the tailnet ACL (see `docs/ops.md` §6b). |
+| Consequences | Operators can reach hardened and ACL-gated hosts without weakening either. Failure diagnosis is port-aware: a rejection on port 22 of a tailnet address means the ACL, on any other port it means `authorized_keys` — conflating them sends the operator to the wrong console. Keys are stored in the plaintext JSON store like the existing passwords; encryption at rest is tracked as D-009. |
+
+---
+
 ## How to add an ADR
 
 1. Increment `ADR-NNN`.

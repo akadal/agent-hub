@@ -25,6 +25,8 @@ export function MachinesPage() {
   const [port, setPort] = useState(27343)
   const [sshUser, setSshUser] = useState('root')
   const [sshPassword, setSshPassword] = useState('targetpass')
+  const [sshPrivateKey, setSshPrivateKey] = useState('')
+  const [sshKeyPassphrase, setSshKeyPassphrase] = useState('')
   const [busy, setBusy] = useState(false)
   const [execOut, setExecOut] = useState<string | null>(null)
 
@@ -107,7 +109,11 @@ export function MachinesPage() {
         port,
         ssh_user: sshUser,
         ssh_password: sshPassword,
+        ssh_private_key: sshPrivateKey.trim() || undefined,
+        ssh_key_passphrase: sshKeyPassphrase || undefined,
       })
+      setSshPrivateKey('')
+      setSshKeyPassphrase('')
       await refresh()
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
@@ -323,6 +329,38 @@ TAILSCALE_TAILNET=-`}
           onChange={setSshPassword}
           type="password"
         />
+        <div className="sm:col-span-2 grid gap-1.5">
+          <label
+            htmlFor="ssh-private-key"
+            className="text-xs font-medium text-muted-foreground"
+          >
+            SSH private key (optional — used instead of the password)
+          </label>
+          <textarea
+            id="ssh-private-key"
+            value={sshPrivateKey}
+            onChange={(e) => setSshPrivateKey(e.target.value)}
+            rows={4}
+            spellCheck={false}
+            autoComplete="off"
+            placeholder={
+              '-----BEGIN OPENSSH PRIVATE KEY-----\n…\n-----END OPENSSH PRIVATE KEY-----'
+            }
+            className="w-full rounded-md border border-border bg-background px-3 py-2 font-mono text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          />
+          <p className="text-xs text-muted-foreground">
+            Required for hosts with <code>PasswordAuthentication no</code>. Paste
+            the whole PEM block, BEGIN and END lines included.
+          </p>
+        </div>
+        {sshPrivateKey.trim() ? (
+          <Field
+            label="Key passphrase (if encrypted)"
+            value={sshKeyPassphrase}
+            onChange={setSshKeyPassphrase}
+            type="password"
+          />
+        ) : null}
         <div className="sm:col-span-2">
           <Button type="submit" disabled={busy}>
             <Plus className="size-4" />

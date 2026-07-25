@@ -156,7 +156,9 @@ func TestMachineCRUD(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m, err := st.CreateMachine("user-1", "box", "10.0.0.5", 22, "root", "secret")
+	m, err := st.CreateMachine("user-1", store.MachineSpec{
+		Name: "box", Address: "10.0.0.5", Port: 22, SSHUser: "root", SSHPassword: "secret",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,7 +200,9 @@ func TestMachineGrants_andAccess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m, err := st.CreateMachine(alice.ID, "box", "10.0.0.1", 22, "root", "x")
+	m, err := st.CreateMachine(alice.ID, store.MachineSpec{
+		Name: "box", Address: "10.0.0.1", Port: 22, SSHUser: "root", SSHPassword: "x",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -285,7 +289,9 @@ func TestTerminalSessions_underMachine(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m, err := st.CreateMachine("u1", "box", "ssh-target", 22, "root", "targetpass")
+	m, err := st.CreateMachine("u1", store.MachineSpec{
+		Name: "box", Address: "ssh-target", Port: 22, SSHUser: "root", SSHPassword: "targetpass",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -27,6 +27,8 @@ export type Machine = {
   address: string
   port: number
   ssh_user: string
+  /** Whether a key is stored for this machine. The key itself never leaves the API. */
+  has_private_key?: boolean
   created_at: string
 }
 
@@ -262,6 +264,9 @@ export async function createMachine(
     port: number
     ssh_user: string
     ssh_password: string
+    /** Optional PEM key; preferred over the password when present. */
+    ssh_private_key?: string
+    ssh_key_passphrase?: string
   },
 ): Promise<Machine> {
   const res = await fetch(`${API_BASE}/api/machines`, {

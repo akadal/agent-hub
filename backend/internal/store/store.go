@@ -278,25 +278,27 @@ func (s *Store) adminCountLocked() int {
 }
 
 // CreateMachine registers a new machine owned by ownerUserID.
-func (s *Store) CreateMachine(ownerUserID, name, address string, port int, sshUser, sshPassword string) (Machine, error) {
-	if name == "" || address == "" {
+func (s *Store) CreateMachine(ownerUserID string, spec MachineSpec) (Machine, error) {
+	if spec.Name == "" || spec.Address == "" {
 		return Machine{}, fmt.Errorf("name and address are required")
 	}
-	if port <= 0 {
-		port = 22
+	if spec.Port <= 0 {
+		spec.Port = 22
 	}
-	if sshUser == "" {
-		sshUser = "root"
+	if spec.SSHUser == "" {
+		spec.SSHUser = "root"
 	}
 	m := Machine{
-		ID:          uuid.NewString(),
-		OwnerUserID: ownerUserID,
-		Name:        name,
-		Address:     address,
-		Port:        port,
-		SSHUser:     sshUser,
-		SSHPassword: sshPassword,
-		CreatedAt:   time.Now().UTC(),
+		ID:               uuid.NewString(),
+		OwnerUserID:      ownerUserID,
+		Name:             spec.Name,
+		Address:          spec.Address,
+		Port:             spec.Port,
+		SSHUser:          spec.SSHUser,
+		SSHPassword:      spec.SSHPassword,
+		SSHPrivateKey:    spec.SSHPrivateKey,
+		SSHKeyPassphrase: spec.SSHKeyPassphrase,
+		CreatedAt:        time.Now().UTC(),
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()

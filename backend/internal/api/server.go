@@ -313,6 +313,9 @@ type createMachineRequest struct {
 	Port        int    `json:"port"`
 	SSHUser     string `json:"ssh_user"`
 	SSHPassword string `json:"ssh_password"`
+	// Optional PEM key, preferred over the password when present.
+	SSHPrivateKey    string `json:"ssh_private_key"`
+	SSHKeyPassphrase string `json:"ssh_key_passphrase"`
 }
 
 func (s *Server) handleCreateMachine(w http.ResponseWriter, r *http.Request) {
@@ -322,7 +325,15 @@ func (s *Server) handleCreateMachine(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	c := claimsFrom(r.Context())
-	m, err := s.Store.CreateMachine(c.UserID, req.Name, req.Address, req.Port, req.SSHUser, req.SSHPassword)
+	m, err := s.Store.CreateMachine(c.UserID, store.MachineSpec{
+		Name:             req.Name,
+		Address:          req.Address,
+		Port:             req.Port,
+		SSHUser:          req.SSHUser,
+		SSHPassword:      req.SSHPassword,
+		SSHPrivateKey:    req.SSHPrivateKey,
+		SSHKeyPassphrase: req.SSHKeyPassphrase,
+	})
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
@@ -386,7 +397,11 @@ func (s *Server) handleTailscaleStatus(w http.ResponseWriter, r *http.Request) {
 type tailscaleImportRequest struct {
 	SSHUser     string `json:"ssh_user"`
 	SSHPassword string `json:"ssh_password"`
-	Port        int    `json:"port"`
+	// Shared PEM key applied to every imported device. Tailnet fleets are
+	// usually keyed alike, and hardened hosts refuse passwords outright.
+	SSHPrivateKey    string `json:"ssh_private_key"`
+	SSHKeyPassphrase string `json:"ssh_key_passphrase"`
+	Port             int    `json:"port"`
 	// OnlineOnly skips devices not seen recently (default true).
 	OnlineOnly *bool `json:"online_only"`
 }
@@ -437,14 +452,15 @@ func (s *Server) handleTailscaleImport(w http.ResponseWriter, r *http.Request) {
 			skipped++
 			continue
 		}
-		m, err := s.Store.CreateMachine(
-			c.UserID,
-			d.Name,
-			d.PreferredAddress,
-			req.Port,
-			req.SSHUser,
-			req.SSHPassword,
-		)
+		m, err := s.Store.CreateMachine(c.UserID, store.MachineSpec{
+			Name:             d.Name,
+			Address:          d.PreferredAddress,
+			Port:             req.Port,
+			SSHUser:          req.SSHUser,
+			SSHPassword:      req.SSHPassword,
+			SSHPrivateKey:    req.SSHPrivateKey,
+			SSHKeyPassphrase: req.SSHKeyPassphrase,
+		})
 		if err != nil {
 			writeErr(w, http.StatusInternalServerError, err.Error())
 			return
@@ -552,6 +568,9 @@ func (s *Server) runExec(w http.ResponseWriter, r *http.Request, m store.Machine
 		Port:     m.Port,
 		User:     m.SSHUser,
 		Password: m.SSHPassword,
+
+		PrivateKey:    m.SSHPrivateKey,
+		KeyPassphrase: m.SSHKeyPassphrase,
 	}, req.Command)
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, "ssh exec failed: "+err.Error())
@@ -705,6 +724,9 @@ func (s *Server) handleCloseTerminal(w http.ResponseWriter, r *http.Request) {
 		Port:     m.Port,
 		User:     m.SSHUser,
 		Password: m.SSHPassword,
+
+		PrivateKey:    m.SSHPrivateKey,
+		KeyPassphrase: m.SSHKeyPassphrase,
 	}, t.RemoteSession)
 	if err := s.Store.CloseTerminal(id); err != nil {
 		writeErr(w, http.StatusNotFound, "terminal session not found")
@@ -996,6 +1018,9 @@ func (s *Server) bridgeSSH(w http.ResponseWriter, r *http.Request, m store.Machi
 		Port:     m.Port,
 		User:     m.SSHUser,
 		Password: m.SSHPassword,
+
+		PrivateKey:    m.SSHPrivateKey,
+		KeyPassphrase: m.SSHKeyPassphrase,
 	}, remoteSession, cols, rows)
 	if err != nil {
 		s.logf("bridgeSSH open failed %s after %s: %v", target, time.Since(openStart).Round(time.Millisecond), err)

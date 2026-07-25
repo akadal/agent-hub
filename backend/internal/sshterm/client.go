@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -18,6 +19,11 @@ type Target struct {
 	Port     int
 	User     string
 	Password string
+	// PrivateKey is an optional PEM private key. Hardened hosts commonly set
+	// PasswordAuthentication=no, where a key is the only way in.
+	PrivateKey string
+	// KeyPassphrase decrypts PrivateKey when it is encrypted.
+	KeyPassphrase string
 }
 
 // dialTimeout is only for the initial TCP connect, not session lifetime.
@@ -48,30 +54,67 @@ func (t Target) addr() string {
 	return net.JoinHostPort(t.Address, fmt.Sprintf("%d", t.Port))
 }
 
-// clientConfig builds the SSH client config. Everything the server says during
-// authentication is recorded into tr: Tailscale SSH puts its browser-approval
-// URL in the banner (and in the keyboard-interactive instruction), and that text
-// is the only thing that explains a check-mode stall.
-func clientConfig(t Target, tr *authTrace) *ssh.ClientConfig {
-	t = t.normalized()
+// authPlan is the ordered set of auth methods for one target, plus whether a
+// key is in play (which changes what a rejection means).
+type authPlan struct {
+	methods []ssh.AuthMethod
+	usesKey bool
+}
+
+// buildAuthPlan parses any configured private key and orders the auth methods,
+// recording server-side prompts into tr as it goes.
+//
+// A malformed key is an error rather than a silent fallback to password: on a
+// host with PasswordAuthentication=no the fallback cannot succeed, and the
+// resulting "auth failed" would send the operator hunting the wrong problem.
+func buildAuthPlan(t Target, tr *authTrace) (authPlan, error) {
+	var plan authPlan
+
+	if key := strings.TrimSpace(t.PrivateKey); key != "" {
+		var signer ssh.Signer
+		var err error
+		if t.KeyPassphrase != "" {
+			signer, err = ssh.ParsePrivateKeyWithPassphrase([]byte(key), []byte(t.KeyPassphrase))
+		} else {
+			signer, err = ssh.ParsePrivateKey([]byte(key))
+		}
+		if err != nil {
+			return plan, fmt.Errorf("private key: %w", err)
+		}
+		// Offered first — it is the only method a hardened sshd will accept.
+		plan.methods = append(plan.methods, ssh.PublicKeys(signer))
+		plan.usesKey = true
+	}
+
 	pass := t.Password
+	plan.methods = append(plan.methods,
+		ssh.Password(pass),
+		// Tailscale SSH and some sshd configs prefer keyboard-interactive.
+		// The prompt text is recorded, not just answered: Tailscale SSH puts
+		// its browser-approval URL here.
+		ssh.KeyboardInteractive(func(user, instruction string, questions []string, echos []bool) ([]string, error) {
+			_ = user
+			_ = echos
+			tr.add(instruction)
+			answers := make([]string, len(questions))
+			for i, q := range questions {
+				tr.add(q)
+				answers[i] = pass
+			}
+			return answers, nil
+		}),
+	)
+	return plan, nil
+}
+
+// clientConfig builds the SSH client config. Anything the server says during
+// authentication lands in tr — the banner is where Tailscale SSH explains a
+// check-mode stall, and dropping it is why that used to look like a bare timeout.
+func clientConfig(t Target, tr *authTrace, plan authPlan) *ssh.ClientConfig {
+	t = t.normalized()
 	return &ssh.ClientConfig{
 		User: t.User,
-		Auth: []ssh.AuthMethod{
-			ssh.Password(pass),
-			// Tailscale SSH and some sshd configs prefer keyboard-interactive.
-			ssh.KeyboardInteractive(func(user, instruction string, questions []string, echos []bool) ([]string, error) {
-				_ = user
-				_ = echos
-				tr.add(instruction)
-				answers := make([]string, len(questions))
-				for i, q := range questions {
-					tr.add(q)
-					answers[i] = pass
-				}
-				return answers, nil
-			}),
-		},
+		Auth: plan.methods,
 		BannerCallback: func(message string) error {
 			tr.add(message)
 			return nil
@@ -98,6 +141,13 @@ func dialRaw(t Target, openDeadline time.Time) (*ssh.Client, net.Conn, error) {
 	addr := t.addr()
 	tr := &authTrace{}
 
+	// Validate credentials before touching the network, so a key that does not
+	// parse is reported instantly instead of after a dial timeout.
+	plan, err := buildAuthPlan(t, tr)
+	if err != nil {
+		return nil, nil, &OpenError{Failure: Diagnose(StageAuthSetup, err, tr, t), Err: err}
+	}
+
 	raw, err := net.DialTimeout("tcp", addr, dialTimeout)
 	if err != nil {
 		return nil, nil, &OpenError{Failure: Diagnose(StageDial, err, tr, t), Err: err}
@@ -110,7 +160,7 @@ func dialRaw(t Target, openDeadline time.Time) (*ssh.Client, net.Conn, error) {
 		_ = raw.SetDeadline(openDeadline)
 	}
 
-	cc, chans, reqs, err := ssh.NewClientConn(raw, addr, clientConfig(t, tr))
+	cc, chans, reqs, err := ssh.NewClientConn(raw, addr, clientConfig(t, tr, plan))
 	if err != nil {
 		_ = raw.Close()
 		return nil, nil, &OpenError{Failure: Diagnose(StageHandshake, err, tr, t), Err: err}

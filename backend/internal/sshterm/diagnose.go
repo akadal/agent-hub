@@ -14,6 +14,8 @@ import (
 type Stage string
 
 const (
+	// StageAuthSetup is local credential preparation, before any network I/O.
+	StageAuthSetup Stage = "auth_setup"
 	// StageDial is the TCP connect.
 	StageDial Stage = "dial"
 	// StageHandshake is the SSH transport + auth exchange.
@@ -40,6 +42,8 @@ const (
 	FailTailscaleDenied FailureKind = "tailscale_denied"
 	// FailAuth — ordinary sshd rejected the credentials.
 	FailAuth FailureKind = "auth_failed"
+	// FailBadKey — the configured private key could not be parsed at all.
+	FailBadKey FailureKind = "bad_private_key"
 	// FailTimeout — the remote accepted TCP then stopped responding.
 	FailTimeout FailureKind = "timeout"
 )
@@ -147,6 +151,17 @@ var hasLocalTailnetAddress = func() bool {
 	return false
 }
 
+// isTailscaleSSHTarget reports whether this address:port is served by Tailscale
+// SSH rather than the host's own sshd.
+//
+// Tailscale only intercepts port 22 on the tailnet address. Any other port on
+// the same 100.x host reaches ordinary OpenSSH — so a rejection there is about
+// authorized_keys, not about the tailnet ACL. Blaming the ACL for a plain key
+// problem sends the operator to the wrong console entirely.
+func isTailscaleSSHTarget(t Target) bool {
+	return isTailnetAddress(t.Address) && t.normalized().Port == 22
+}
+
 func isTimeout(err error) bool {
 	var ne net.Error
 	if errors.As(err, &ne) && ne.Timeout() {
@@ -180,7 +195,15 @@ const (
 		"(docker-compose.coolify.yml) or on the host directly (scripts/run-api-host.sh)."
 
 	hintAuth = "The remote rejected the credentials. Check the SSH user and password stored for " +
-		"this machine, and that sshd allows password authentication for that user."
+		"this machine, and that sshd allows password authentication for that user " +
+		"(hardened hosts often set PasswordAuthentication no — then only a key works)."
+
+	hintAuthKey = "The remote rejected the key. Check that the matching public key is in " +
+		"~/.ssh/authorized_keys for this SSH user on the target, that the file is mode 600 " +
+		"and its directory 700, and that sshd allows public key authentication."
+
+	hintBadKey = "The stored private key could not be parsed. Paste the full PEM block including " +
+		"the BEGIN and END lines, and supply the passphrase if the key is encrypted."
 
 	hintUnreachable = "Nothing is accepting SSH on that address and port. Check the machine is up, " +
 		"the port is right, and any firewall allows it."
@@ -212,6 +235,14 @@ func Diagnose(stage Stage, err error, tr *authTrace, t Target) Failure {
 	}
 
 	switch stage {
+	case StageAuthSetup:
+		return Failure{
+			Kind:      FailBadKey,
+			Message:   "the stored SSH private key is not usable",
+			Hint:      hintBadKey,
+			Retryable: false,
+		}
+
 	case StageDial:
 		if tailnet && isTimeout(err) {
 			// Both "we are off the tailnet" and "that peer is asleep" time out
@@ -242,7 +273,7 @@ func Diagnose(stage Stage, err error, tr *authTrace, t Target) Failure {
 
 	case StageHandshake:
 		if isTimeout(err) {
-			if tailnet {
+			if isTailscaleSSHTarget(t) {
 				// TCP completed but the SSH handshake never finished against a
 				// tailnet peer: Tailscale SSH is parking the session pending
 				// approval. This is the check-mode stall with no banner.
@@ -261,7 +292,7 @@ func Diagnose(stage Stage, err error, tr *authTrace, t Target) Failure {
 			}
 		}
 		if isAuthRejection(err) {
-			if tailnet {
+			if isTailscaleSSHTarget(t) {
 				return Failure{
 					Kind:      FailTailscaleDenied,
 					Message:   "Tailscale SSH denied this node",
@@ -269,10 +300,15 @@ func Diagnose(stage Stage, err error, tr *authTrace, t Target) Failure {
 					Retryable: false,
 				}
 			}
+			// Which hint is right depends on what we actually offered.
+			hint := hintAuth
+			if strings.TrimSpace(t.PrivateKey) != "" {
+				hint = hintAuthKey
+			}
 			return Failure{
 				Kind:      FailAuth,
 				Message:   "authentication failed for " + t.normalized().User,
-				Hint:      hintAuth,
+				Hint:      hint,
 				Retryable: false,
 			}
 		}
