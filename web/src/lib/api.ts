@@ -29,6 +29,12 @@ export type Machine = {
   ssh_user: string
   /** Whether a key is stored for this machine. The key itself never leaves the API. */
   has_private_key?: boolean
+  /**
+   * The host's own key, recorded on the first successful connect. Public data —
+   * compare it against `ssh-keyscan <address>` to confirm you reached the right
+   * machine. Absent until the first connect succeeds.
+   */
+  host_key_fingerprint?: string
   created_at: string
 }
 
@@ -316,6 +322,10 @@ export async function importFromTailscale(
     ssh_password: string
     port: number
     online_only?: boolean
+    /** Shared PEM key applied to every imported device. Required for a fleet
+     *  with `PasswordAuthentication no`, where a password imports nothing usable. */
+    ssh_private_key?: string
+    ssh_key_passphrase?: string
   },
 ): Promise<TailscaleImportResult> {
   const res = await fetch(`${API_BASE}/api/machines/tailscale/import`, {

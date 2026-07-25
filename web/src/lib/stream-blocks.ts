@@ -40,11 +40,11 @@ const SYSTEM_LINE =
  *   user@host:~/src$
  */
 const PROMPT_AT_START =
-  /^(?:[\w.-]+@)?[\w.-]+:[^\n#$]*[#\$]\s*/
+  /^(?:[\w.-]+@)?[\w.-]+:[^\n#$]*[#$]\s*/
 
 /** Whole line is only a prompt (no command). */
 const PROMPT_ONLY =
-  /^(?:[\w.-]+@)?[\w.-]+:[^\n#$]*[#\$]\s*$/
+  /^(?:[\w.-]+@)?[\w.-]+:[^\n#$]*[#$]\s*$/
 
 export function isSlashCommandLine(line: string): boolean {
   const t = line.trimStart()
@@ -300,7 +300,7 @@ export function normalizeCommittedLine(
   if (!text.trim()) return null
 
   // Drop pure cursor/status leftovers / dangling quote from PS2 close
-  if (/^[\[\]?0-9;]*$/.test(text)) return null
+  if (/^[[\]?0-9;]*$/.test(text)) return null
   if (/^['"`\\]+$/.test(text.trim())) return null
 
   if (isUserEcho(feed, text)) return null

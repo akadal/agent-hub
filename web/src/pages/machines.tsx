@@ -28,16 +28,37 @@ function elapsedSeconds(c: CheckState | undefined): number {
   return isRunning(c) ? Math.max(0, Math.round((Date.now() - c.startedAt) / 1000)) : 0
 }
 
+/**
+ * True for a machine whose port 22 is answered by Tailscale SSH rather than the
+ * host's own sshd — a tailnet address (100.64.0.0/10) on the default port.
+ * Mirrors isTailscaleSSHTarget in the backend: Tailscale intercepts port 22
+ * only, so the same host on 2222 is ordinary OpenSSH.
+ *
+ * Worth flagging because such a target authenticates by tailnet ACL and ignores
+ * the stored password entirely — without this the Machines page shows a
+ * password field that looks like it is doing the work, and a failing host sends
+ * you to rotate a credential that was never consulted (D-008).
+ */
+function isTailscaleSSHTarget(m: Machine): boolean {
+  const octets = m.address.split('.')
+  if (octets.length !== 4) return false
+  const [a, b] = [Number(octets[0]), Number(octets[1])]
+  return a === 100 && b >= 64 && b <= 127 && m.port === 22
+}
+
 export function MachinesPage() {
   const { token } = useAuth()
   const [machines, setMachines] = useState<Machine[]>([])
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
-  const [name, setName] = useState('ssh-dummy')
-  const [address, setAddress] = useState('ssh-target')
-  const [port, setPort] = useState(27343)
+  // Empty, not seeded with the demo host: pre-filling a real password meant
+  // every registration started with `targetpass` already in the field, and it
+  // silently became the credential for anyone who only edited the address.
+  const [name, setName] = useState('')
+  const [address, setAddress] = useState('')
+  const [port, setPort] = useState(22)
   const [sshUser, setSshUser] = useState('root')
-  const [sshPassword, setSshPassword] = useState('targetpass')
+  const [sshPassword, setSshPassword] = useState('')
   const [sshPrivateKey, setSshPrivateKey] = useState('')
   const [sshKeyPassphrase, setSshKeyPassphrase] = useState('')
   const [busy, setBusy] = useState(false)
@@ -55,6 +76,8 @@ export function MachinesPage() {
   const [tsLoading, setTsLoading] = useState(false)
   const [tsUser, setTsUser] = useState('root')
   const [tsPassword, setTsPassword] = useState('')
+  const [tsKey, setTsKey] = useState('')
+  const [tsKeyPassphrase, setTsKeyPassphrase] = useState('')
   const [tsPort, setTsPort] = useState(22)
   const [tsOnlineOnly, setTsOnlineOnly] = useState(true)
   const [tsBusy, setTsBusy] = useState(false)
@@ -111,8 +134,12 @@ export function MachinesPage() {
         ssh_password: tsPassword,
         port: tsPort,
         online_only: tsOnlineOnly,
+        ssh_private_key: tsKey.trim() || undefined,
+        ssh_key_passphrase: tsKeyPassphrase || undefined,
       })
       setTsMsg(res.message)
+      setTsKey('')
+      setTsKeyPassphrase('')
       // Refresh device list + machines
       setTsStatus(await getTailscaleStatus(token))
       await refresh()
@@ -138,6 +165,11 @@ export function MachinesPage() {
         ssh_private_key: sshPrivateKey.trim() || undefined,
         ssh_key_passphrase: sshKeyPassphrase || undefined,
       })
+      // Clear the whole form: leaving one host's credential in the fields is how
+      // the next machine silently inherits it.
+      setName('')
+      setAddress('')
+      setSshPassword('')
       setSshPrivateKey('')
       setSshKeyPassphrase('')
       await refresh()
@@ -312,6 +344,16 @@ TAILSCALE_TAILNET=-`}
                 />
               </div>
 
+              <PrivateKeyField
+                id="ts-private-key"
+                label="SSH private key (optional — applied to every imported device)"
+                value={tsKey}
+                onChange={setTsKey}
+                passphrase={tsKeyPassphrase}
+                onPassphraseChange={setTsKeyPassphrase}
+                help="Tailnet fleets are usually keyed alike. Without a key, importing hosts that set PasswordAuthentication no registers machines you cannot open."
+              />
+
               <label className="flex items-center gap-2 text-sm">
                 <input
                   type="checkbox"
@@ -359,11 +401,12 @@ TAILSCALE_TAILNET=-`}
         className="grid gap-3 rounded-lg border border-border bg-card p-4 sm:grid-cols-2"
       >
         <h2 className="sm:col-span-2 text-sm font-semibold">New device</h2>
-        <Field label="Name" value={name} onChange={setName} />
+        <Field label="Name" value={name} onChange={setName} placeholder="build-box" />
         <Field
           label="Address (IP / hostname)"
           value={address}
           onChange={setAddress}
+          placeholder="10.0.0.5 or host.example"
         />
         <Field
           label="SSH port"
@@ -376,39 +419,22 @@ TAILSCALE_TAILNET=-`}
           value={sshPassword}
           onChange={setSshPassword}
           type="password"
+          // A key-authenticated host has no password to give, and demanding one
+          // here would block exactly the hardened hosts keys exist for.
+          required={!sshPrivateKey.trim()}
+          placeholder={sshPrivateKey.trim() ? 'not used — key takes precedence' : ''}
         />
-        <div className="sm:col-span-2 grid gap-1.5">
-          <label
-            htmlFor="ssh-private-key"
-            className="text-xs font-medium text-muted-foreground"
-          >
-            SSH private key (optional — used instead of the password)
-          </label>
-          <textarea
+        <div className="sm:col-span-2">
+          <PrivateKeyField
             id="ssh-private-key"
+            label="SSH private key (optional — used instead of the password)"
             value={sshPrivateKey}
-            onChange={(e) => setSshPrivateKey(e.target.value)}
-            rows={4}
-            spellCheck={false}
-            autoComplete="off"
-            placeholder={
-              '-----BEGIN OPENSSH PRIVATE KEY-----\n…\n-----END OPENSSH PRIVATE KEY-----'
-            }
-            className="w-full rounded-md border border-border bg-background px-3 py-2 font-mono text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            onChange={setSshPrivateKey}
+            passphrase={sshKeyPassphrase}
+            onPassphraseChange={setSshKeyPassphrase}
+            help="Required for hosts with PasswordAuthentication no. Paste the whole PEM block, BEGIN and END lines included."
           />
-          <p className="text-xs text-muted-foreground">
-            Required for hosts with <code>PasswordAuthentication no</code>. Paste
-            the whole PEM block, BEGIN and END lines included.
-          </p>
         </div>
-        {sshPrivateKey.trim() ? (
-          <Field
-            label="Key passphrase (if encrypted)"
-            value={sshKeyPassphrase}
-            onChange={setSshKeyPassphrase}
-            type="password"
-          />
-        ) : null}
         <div className="sm:col-span-2">
           <Button type="submit" disabled={busy}>
             <Plus className="size-4" />
@@ -479,7 +505,31 @@ TAILSCALE_TAILNET=-`}
                   <div className="font-medium">{m.name}</div>
                   <div className="font-mono text-xs text-muted-foreground">
                     {m.ssh_user}@{m.address}:{m.port}
+                    {/* Which credential the bridge will actually offer. The key
+                        itself never leaves the API — only this flag does. */}
+                    <span className="ml-2 rounded border border-border px-1.5 py-0.5 font-sans text-[10px] uppercase tracking-wide">
+                      {m.has_private_key ? 'key' : 'password'}
+                    </span>
                   </div>
+                  {m.host_key_fingerprint ? (
+                    <div
+                      className="truncate font-mono text-[10px] text-muted-foreground"
+                      title={`Host key pinned on first connect. Compare with: ssh-keyscan -p ${m.port} ${m.address}`}
+                    >
+                      host key {m.host_key_fingerprint}
+                    </div>
+                  ) : null}
+                  {isTailscaleSSHTarget(m) ? (
+                    <p className="mt-1 text-[11px] leading-snug text-amber-700 dark:text-amber-500">
+                      Tailscale SSH target — port 22 on a tailnet address is
+                      answered by Tailscale, which authenticates by tailnet ACL
+                      and <strong>ignores the stored credential</strong>. If this
+                      host fails, fix the ACL (grant the hub node{' '}
+                      <code className="text-[10px]">action: accept</code>) rather
+                      than the password. Using the host&apos;s own sshd on another
+                      port avoids this entirely.
+                    </p>
+                  ) : null}
                   <p className="mt-1 text-[11px] leading-snug text-muted-foreground">
                     Host tip: if this box drops idle shells, set sshd{' '}
                     <code className="text-[10px]">ClientAliveInterval 30</code>{' '}
@@ -542,12 +592,14 @@ function Field({
   onChange,
   type = 'text',
   required = true,
+  placeholder,
 }: {
   label: string
   value: string
   onChange: (v: string) => void
   type?: string
   required?: boolean
+  placeholder?: string
 }) {
   return (
     <label className="flex flex-col gap-1 text-sm">
@@ -558,8 +610,64 @@ function Field({
         value={value}
         onChange={(e) => onChange(e.target.value)}
         required={required}
+        placeholder={placeholder}
       />
     </label>
+  )
+}
+
+/**
+ * PEM key input plus the passphrase field it only needs once a key is present.
+ * Shared by "New device" and the Tailscale import so both paths can register a
+ * host that refuses passwords.
+ */
+function PrivateKeyField({
+  id,
+  label,
+  value,
+  onChange,
+  passphrase,
+  onPassphraseChange,
+  help,
+}: {
+  id: string
+  label: string
+  value: string
+  onChange: (v: string) => void
+  passphrase: string
+  onPassphraseChange: (v: string) => void
+  help: string
+}) {
+  return (
+    <div className="grid gap-1.5">
+      <label htmlFor={id} className="text-xs font-medium text-muted-foreground">
+        {label}
+      </label>
+      <textarea
+        id={id}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        rows={4}
+        spellCheck={false}
+        autoComplete="off"
+        placeholder={
+          '-----BEGIN OPENSSH PRIVATE KEY-----\n…\n-----END OPENSSH PRIVATE KEY-----'
+        }
+        className="w-full rounded-md border border-border bg-background px-3 py-2 font-mono text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      />
+      <p className="text-xs text-muted-foreground">{help}</p>
+      {value.trim() ? (
+        <div className="mt-1 max-w-xs">
+          <Field
+            label="Key passphrase (if encrypted)"
+            value={passphrase}
+            onChange={onPassphraseChange}
+            type="password"
+            required={false}
+          />
+        </div>
+      ) : null}
+    </div>
   )
 }
 

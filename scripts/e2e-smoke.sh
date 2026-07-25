@@ -27,12 +27,7 @@ code=$(curl -sS -o /dev/null -w '%{http_code}' "$API/api/me" || true)
 test "$code" = "401"
 
 echo "== ensure single demo machine =="
-# delete all existing machines
-MACHINES=$(curl -sfS "$API/api/machines" -H "Authorization: Bearer $TOKEN")
-echo "$MACHINES" | python3 -c '
-import sys,json,urllib.request,os
-token=os.environ.get("TOKEN","")
-' 2>/dev/null || true
+# Start from a clean inventory so the session assertions below can count rows.
 python3 - <<PY
 import json, urllib.request
 api = "$API"

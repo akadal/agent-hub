@@ -74,6 +74,7 @@ Ordered milestones for the Multi-Machine Terminal Dashboard. Items are product/e
 | M5.3 | Query / export UI for operators | done |
 
 > **MVP note:** append-only JSON store (cap 1000); admin list UI; no CSV export yet.
+> Covered writes: login (ok/failed), user create/update/delete, machine create/delete/check, grant add/revoke, settings update, terminal create/attach/close, and `exec` (command truncated to 120 chars). Secrets are never recorded — a password change logs *that* it changed, not the value.
 
 ---
 
@@ -97,6 +98,7 @@ Ordered milestones for the Multi-Machine Terminal Dashboard. Items are product/e
 | M7.2 | Verify local Compose run + one generic remote deploy path | done |
 | M7.3 | Responsive / mobile browser smoke (login, machine list, terminal) | done |
 | M7.4 | Docs update (README run notes, debt watch list) | done |
+| M7.5 | CI on push/PR: Go vet+test+gofmt, web lint/test/build, Compose e2e | done |
 
 > **MVP note:** Compose e2e + scripts/e2e-smoke; mobile fullscreen terminal stabilized; remaining polish is optional.
 

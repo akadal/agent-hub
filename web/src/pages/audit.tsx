@@ -39,8 +39,9 @@ export function AuditPage() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Audit</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Recent security-relevant actions (login, machines, terminals, grants,
-            settings). Newest first; capped server-side.
+            Recent security-relevant actions (login, users, machines, terminals,
+            grants, settings). Newest first; capped server-side. Credentials are
+            never recorded — a password change logs that it changed, not the value.
           </p>
         </div>
         <Button variant="outline" size="sm" onClick={() => void refresh()}>

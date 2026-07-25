@@ -1,32 +1,45 @@
-# React + TypeScript + Vite
+# Agent Hub — web
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+The React SPA: login, machine inventory, the multi-session terminal workspace,
+and the admin pages (users, permissions, audit, settings).
 
-Currently, two official plugins are available:
+Vite + React + TypeScript + Tailwind + shadcn/ui primitives, terminals via
+[`@xterm/xterm`](https://github.com/xtermjs/xterm.js) over a WebSocket to the Go
+API. See [`../docs/decisions.md`](../docs/decisions.md) ADR-006 for why this
+shell, and [`../README.md`](../README.md) to run the whole stack.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+## Develop
 
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the Oxlint configuration
-
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+```bash
+npm install
+npm run dev      # proxies /api and /health to http://localhost:27341
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+The dev server needs the API running (`cd ../backend && go run ./cmd/agent-hub`).
+Point it at a different backend with `VITE_API_PROXY=http://127.0.0.1:27351 npm run dev`
+when you want a scratch API instead of your usual one.
+
+```bash
+npm run lint     # oxlint
+npm test         # node:test over src/lib/*.test.ts
+npm run build    # tsc -b && vite build
+```
+
+## Layout
+
+```
+src/
+├── pages/       # one file per route (workspace.tsx is the terminal UI)
+├── components/  # layout shell, sidebar, ui/ primitives, chat-style view
+└── lib/         # api client, auth context, terminal stream parsing
+```
+
+`src/lib/api.ts` is the single place that talks to the backend — add endpoints
+there rather than calling `fetch` from a page.
+
+## Build-time config
+
+`VITE_API_BASE_URL` is baked into the bundle. Leave it **empty** for same-origin
+(the `web` container's nginx proxies `/api` to the API service) — that is the
+right setting behind any reverse proxy. Set it only when the browser must reach
+an API on a different origin.
