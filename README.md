@@ -7,6 +7,10 @@ Manage SSH hosts from the browser, open **multiple independent terminal sessions
 [![CI](https://github.com/akadal/agent-hub/actions/workflows/ci.yml/badge.svg)](https://github.com/akadal/agent-hub/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/badge/release-v1.1.0-brightgreen.svg)](CHANGELOG.md)
 
+Run it **locally with Docker Compose**, or **host your own instance** on a VPS,
+Coolify, or anything else that runs containers. Same images either way — see
+[Running it](#running-it).
+
 ---
 
 ## Why Agent Hub?
@@ -16,7 +20,8 @@ When you work across several hosts (or several jobs on one host), juggling SSH t
 - A **machine inventory** you control (manual register by IP/hostname — no auto-discovery)
 - A **session workspace**: under each machine, create named terminals (`build`, `debug`, `logs`, …), switch between them, close what you don’t need
 - **Browser terminals** powered by xterm.js over a WebSocket → SSH bridge
-- **Local-first packaging** with Docker Compose (and a dummy SSH target for demos)
+- A UI that **works on a phone** — soft keys for Esc / Tab / Ctrl / arrows, because no mobile keyboard has them
+- **Self-hosted, single binary + static SPA.** No account, no telemetry, no vendor
 
 Tailscale (or any VPN) can sit under your network path, but **it is not required** — plain SSH by address is enough.
 
@@ -28,35 +33,47 @@ Tailscale (or any VPN) can sit under your network path, but **it is not required
 |------|------------------|
 | Auth | Local users, JWT sessions, bootstrap admin from env, self-service password change, failed-login throttle |
 | Users & permissions | Multi-user CRUD, admin/user roles, per-machine grants with a management UI |
-| Machines | Register / list / delete by IP or hostname; import from a Tailscale tailnet |
+| Machines | Register / list / delete by IP or hostname; pick-and-choose import from a Tailscale tailnet |
 | Credentials | SSH password **or** private key (encrypted keys supported); keys never leave the API and are **encrypted at rest** |
 | Host identity | Host keys pinned on first connect; a changed key aborts the session instead of handing over the credential |
 | Diagnostics | Per-machine **connection check** that names the cause (unreachable, bad key, auth refused, Tailscale approval pending) instead of failing blind |
 | Sessions | 1:N named terminal sessions under a machine; create, switch, close |
 | Terminal | Interactive xterm.js UI, **tmux-backed** so sessions survive disconnects, plus a one-shot `exec` API |
-| Mobile | Session strip, sheet picker and a soft-key bar (Esc / Tab / Ctrl / arrows) so a phone keyboard can actually drive a shell |
+| Mobile | Sheet picker, always-visible session strip, and a soft-key bar (Esc / Tab / sticky Ctrl / `^C` / arrows) so a phone keyboard can actually drive a shell |
 | Appearance | Light, dark or follow-the-system — terminal palette included |
 | Reconnect | WebSocket + SSH keepalives and auto-reattach after phone sleep or network flap |
 | Audit | Append-only log of logins, machine/user/grant changes and terminal use, with an operator UI and CSV export |
 | Ops | Docker Compose (`api`, `web`, optional `ssh-target` for e2e), graceful shutdown, version reported by `/health` and the UI |
 
-**Not in this release (planned):** Tailscale identity login (local JWT is the only auth path today), credential encryption at rest, audit export/retention jobs.
+**Not in this release (planned):** Tailscale identity login — local JWT is the
+only auth path today. Per-terminal permission grants; today a grant is per
+machine and terminals inherit it. Everything known and deliberately deferred is
+listed in [`docs/debt.md`](docs/debt.md).
 
 ---
 
-## Quick start
+## Running it
+
+Two supported shapes, same images:
+
+| | Local | Your own instance |
+|---|---|---|
+| For | Trying it out, developing, driving machines from your laptop | Reaching your fleet from anywhere, including your phone |
+| Runs on | Docker Desktop / any Docker host | VPS, Coolify, Dokploy, Portainer, plain `docker compose` |
+| Access | `http://localhost:27342` | Your domain, TLS at your reverse proxy |
+| Setup | [below](#local-docker-compose) | [below](#your-own-instance) |
 
 ### Requirements
 
 - Docker + Docker Compose
-- (Optional for local dev) Go 1.22+, Node 20+
+- (Optional, for local dev without Docker) Go 1.22+, Node 20+
 
-### Run with Compose
+### Local (Docker Compose)
 
 ```bash
 git clone https://github.com/akadal/agent-hub.git
 cd agent-hub
-cp .env.example .env   # optional; defaults work for local demo
+cp .env.example .env   # optional; defaults work for a local demo
 docker compose up --build
 ```
 
@@ -66,16 +83,14 @@ docker compose up --build
 | API | http://localhost:27341 (also via web `/api` same-origin) |
 | Demo SSH host | `localhost:27343` (`root` / `targetpass`) |
 
-**Coolify:** domain → **web** service, exposed port **80** (not 27342).
-
-**Demo login** (seeded only if missing — set via env for your own instance):
+**Demo login** (seeded only if missing):
 
 - Username: `admin`
 - Password: `123456`
 
 Override with `BOOTSTRAP_ADMIN_USERNAME` / `BOOTSTRAP_ADMIN_PASSWORD` in `.env` before first start, then change it from **Settings → Change password** once you are in. Changing the env value and restarting re-applies it — that is the recovery path if the password is lost; leaving it unchanged never overwrites a password you set in the UI.
 
-### First minutes
+#### First minutes
 
 1. Sign in at the web UI.
 2. **Machines** → register the demo host:
@@ -100,6 +115,57 @@ Automated smoke (with the stack running):
 ./scripts/e2e-smoke.sh
 ```
 
+> `e2e-smoke.sh` **deletes every machine** in the instance it points at. Run it against a scratch stack only.
+
+### Your own instance
+
+Anything that can run `docker compose` will do — Coolify, Dokploy, a plain VPS.
+The five things that actually matter:
+
+1. **Point your domain at the `web` service, container port `80`** (not 27342).
+   `web` serves the SPA and proxies `/api` and `/health` to the API on the same
+   origin. Leave `VITE_API_BASE_URL` **empty** — that is what keeps the browser
+   talking to your domain instead of somebody's localhost.
+2. **Do not give `api` a public domain.** It only needs to be reachable from
+   `web` on the internal network.
+3. **Set real secrets before the first start:** `JWT_SECRET` and
+   `BOOTSTRAP_ADMIN_PASSWORD`. The API logs a warning on every boot while they
+   are still the published demo values.
+4. **Persist and back up `DATA_DIR`** (the `api-data` volume). It holds your
+   machines, grants, audit log — and, unless you set `CREDENTIAL_KEY` yourself,
+   the key that decrypts the stored SSH credentials. A restored store without
+   its key is unreadable, and the API refuses to start rather than connect with
+   blank credentials.
+5. **Drop the demo target.** `ssh-target` exists for the local demo and e2e;
+   there is no reason to run an extra SSH server on your deployment.
+
+```bash
+# On the host, after cloning and writing a real .env
+docker compose up -d --build
+curl -s https://your-host.example/health
+# {"service":"agent-hub","status":"ok","version":"1.1.0"}
+```
+
+Check that `version` after every deploy — the running build reports itself
+there and in the web sidebar, so a stale container is visible immediately.
+
+#### If your SSH targets are on a Tailscale `100.x` address
+
+Containers on a Docker bridge network cannot reach the host's tailnet, so the
+SSH handshake times out. Run the API with host networking instead:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.coolify.yml up -d --build
+```
+
+In Coolify you can equivalently set **Network Mode = host** on the `api`
+service. Docker Desktop on macOS has no host networking, so there the API runs
+outside Docker — see the header of [`docker-compose.yml`](docker-compose.yml)
+and [`docs/ops.md`](docs/ops.md) §6b, which also explains why an `"action":
+"check"` tailnet ACL can never work for a headless hub.
+
+Upgrades, backup and incident notes: [`docs/ops.md`](docs/ops.md) §3.
+
 ---
 
 ## Architecture (short)
@@ -123,7 +189,8 @@ Your machines (or Compose ssh-target)
 
 ## Configuration
 
-Copy [`.env.example`](.env.example). Important variables:
+Copy [`.env.example`](.env.example). Every variable the code reads is listed
+there — the app has no hidden knobs. The ones that matter most:
 
 | Variable | Purpose |
 |----------|---------|
@@ -140,8 +207,6 @@ Copy [`.env.example`](.env.example). Important variables:
 | `TAILSCALE_API_KEY` | Optional API access token that enables **Machines → Import from Tailscale** |
 | `TAILSCALE_TAILNET` | Tailnet for that key; `-` (default) means the key owner's tailnet |
 
-The API logs a warning at startup if `JWT_SECRET` or `BOOTSTRAP_ADMIN_PASSWORD` is still the published demo default.
-
 ---
 
 ## Development
@@ -154,7 +219,7 @@ cd backend && go run ./cmd/agent-hub
 cd web && npm ci && npm run dev
 
 # Tests — the same three suites CI runs
-cd backend && go test ./...
+cd backend && gofmt -l . && go vet ./... && go test ./...
 cd web && npm run lint && npm test && npm run build
 ```
 
@@ -195,13 +260,14 @@ cd backend && AGENT_HUB_SSH_KEY_FILE=~/.ssh/id_ed25519 go run ./cmd/sshdiag 10.0
 | [`docs/architecture.md`](docs/architecture.md) | System sketch |
 | [`docs/ops.md`](docs/ops.md) | Run / deploy notes |
 | [`docs/decisions.md`](docs/decisions.md) | ADRs |
+| [`docs/debt.md`](docs/debt.md) | Known shortcuts and accepted risks |
 
 ---
 
 ## Security notes
 
 - Bootstrap credentials in `.env.example` are for **local demos only** — change `JWT_SECRET` and `BOOTSTRAP_ADMIN_PASSWORD` before any shared or internet-facing deploy. The API warns at startup while they are unchanged.
-- SSH passwords **and private keys** are stored unencrypted in the API data directory so the bridge can use them. Treat `DATA_DIR` as secret: it is owner-only (`0700`), but anyone who can read it holds your fleet's credentials.
+- SSH passwords, private keys and key passphrases are **encrypted at rest** (AES-256-GCM) inside the store, so the store file alone is not enough. The API has to open them unattended, so the key is reachable by it: by default `credential.key` in the same `0700` data directory. Set `CREDENTIAL_KEY` to keep it elsewhere.
 - Prefer private networks (VPN / Tailscale / LAN) for production access; TLS and reverse proxies are operator-provided. The in-app network policy records intent — it does not block traffic.
 - Reaching a host over **Tailscale SSH** (port 22 on a `100.x` address) authenticates by tailnet ACL, not by the credential you stored. See [`docs/ops.md`](docs/ops.md) §6b.
 - Failed logins are throttled **per account** (10 per 5 minutes, then `429`), because behind a reverse proxy every request shares the proxy's address. Broad request-rate limiting belongs at your edge.
@@ -223,14 +289,23 @@ Participation is covered by the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ---
 
-## License
-
-MIT — see [LICENSE](LICENSE).
-
----
-
 ## Status
 
 **v1.1.0 — feature-complete and self-hostable.** Login, users and per-machine permissions, machine inventory with connection diagnostics, password or key SSH auth with credentials encrypted at rest, a multi-session tmux-backed workspace that works on a phone, an audit log with export, and Compose packaging all work end to end.
 
 Known gaps are tracked openly in [`docs/debt.md`](docs/debt.md) — the notable ones: network policy is recorded intent rather than enforcement (secure the edge yourself), Tailscale identity login is not implemented, and terminal grants are inherited from the machine rather than set per session.
+
+---
+
+## Credits
+
+Built by **[Emre Akadal](https://github.com/akadal)** — **Claude & Grok
+powered**. The code, tests and the documents under [`docs/`](docs/) were written
+with those models in the loop; the product decisions, the review and the
+shipping are human.
+
+---
+
+## License
+
+MIT — see [LICENSE](LICENSE).
