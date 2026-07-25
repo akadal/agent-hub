@@ -37,6 +37,18 @@ The running build reports its own version — in the web sidebar, and in
 - **`AUDIT_MAX_EVENTS`** to raise or lower how much audit history is kept.
 - **`CREDENTIAL_KEY`** to supply the credential encryption key from outside the
   data directory.
+- **Tailnet-only access** (Settings). Off by default. When on, the API refuses
+  any request whose client address is not in Tailscale's ranges — in front of
+  login, so an outside caller cannot even try a password. iPhones and other
+  devices get in over the tailnet as usual. It refuses to be switched on from
+  an address that would be blocked, loopback and `/health` keep working, and
+  `ACCESS_ENFORCEMENT=off` is the recovery path. This is documented as the
+  *second* lock; the one that holds is serving the app on the tailnet and not
+  publishing the port at all (`docs/ops.md` §5d). Closes D-004.
+- **`TRUSTED_PROXIES`** so the API can identify the real client behind a
+  reverse proxy without trusting a caller-supplied header. Unset, it defaults
+  to loopback plus the private ranges. Tailscale's own ranges are never trusted
+  as proxies.
 
 ### Changed
 

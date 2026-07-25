@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/netip"
 	"strconv"
 	"strings"
 	"sync"
@@ -32,6 +33,12 @@ type Server struct {
 	TailscaleTailnet string
 	// TailscaleBaseURL overrides api.tailscale.com. Only tests set it.
 	TailscaleBaseURL string
+	// TrustedProxies are the reverse proxies allowed to speak for a client
+	// (see clientip.go). Empty falls back to DefaultTrustedProxies().
+	TrustedProxies []netip.Prefix
+	// AccessEnforcementDisabled is the escape hatch for an operator who locked
+	// themselves out: ACCESS_ENFORCEMENT=off makes the guard observe only.
+	AccessEnforcementDisabled bool
 
 	loginOnce     sync.Once
 	loginThrottle *loginThrottle
@@ -123,7 +130,9 @@ func (s *Server) NewMux() http.Handler {
 
 	mount("GET", "/machines/{id}/terminal", s.handleMachineTerminalWS)
 
-	return withCORS(mux)
+	// The guard wraps the whole surface rather than individual routes, so a
+	// route added later cannot quietly opt out of the access policy.
+	return withCORS(s.withAccessGuard(mux))
 }
 
 // NewMux is kept for simple health-only tests of the package entry.
@@ -1121,11 +1130,28 @@ func csvCell(v string) string {
 }
 
 func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, s.Store.GetSettings())
+	st := s.Store.GetSettings()
+	d := s.evaluateAccess(r)
+	// The diagnostic travels with the settings because the operator cannot
+	// judge this switch without it: whether the server can identify callers at
+	// all decides if the setting is a lock or a decoration.
+	writeJSON(w, http.StatusOK, map[string]any{
+		"network_mode": st.NetworkMode,
+		"tailnet_only": st.TailnetOnly,
+		"access": map[string]any{
+			"client_ip":            d.ClientIP,
+			"client_ip_known":      d.Known,
+			"client_on_tailnet":    d.Known && IsTailnetAddr(d.Addr),
+			"client_allowed":       s.wouldAllowUnderTailnetOnly(d),
+			"enforcement_disabled": s.AccessEnforcementDisabled,
+		},
+	})
 }
 
 type patchSettingsRequest struct {
 	NetworkMode string `json:"network_mode"`
+	// Pointer so "not mentioned" differs from "set to false".
+	TailnetOnly *bool `json:"tailnet_only"`
 }
 
 func (s *Server) handlePatchSettings(w http.ResponseWriter, r *http.Request) {
@@ -1134,12 +1160,32 @@ func (s *Server) handlePatchSettings(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid json body")
 		return
 	}
-	st, err := s.Store.UpdateSettings(req.NetworkMode)
+	// Turning the lock on from outside the tailnet would lock the operator out
+	// of the UI that turns it off again. Refuse instead, and say why.
+	if req.TailnetOnly != nil && *req.TailnetOnly && !s.AccessEnforcementDisabled {
+		d := s.evaluateAccess(r)
+		switch {
+		case !d.Known:
+			writeErr(w, http.StatusConflict,
+				"Refusing to enable: this server cannot tell which address you are calling from, "+
+					"so it would reject you next. Set TRUSTED_PROXIES for the proxies in front of it first.")
+			return
+		case !s.wouldAllowUnderTailnetOnly(d):
+			writeErr(w, http.StatusConflict,
+				"Refusing to enable: you are calling from "+d.ClientIP+
+					", which is not a Tailscale address — you would lock yourself out. "+
+					"Reconnect over the tailnet and try again.")
+			return
+		}
+	}
+
+	st, err := s.Store.UpdateSettings(req.NetworkMode, req.TailnetOnly)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	s.audit(r, "settings.update", "", "", "network_mode="+st.NetworkMode)
+	s.audit(r, "settings.update", "", "",
+		fmt.Sprintf("network_mode=%s tailnet_only=%t", st.NetworkMode, st.TailnetOnly))
 	writeJSON(w, http.StatusOK, st)
 }
 

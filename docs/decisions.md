@@ -150,6 +150,18 @@ Lightweight log of decisions that affect structure. Full product requirements st
 
 ---
 
+## ADR-013: A lock that refuses to pretend
+
+| Field | Value |
+|-------|--------|
+| Status | accepted |
+| Date | 2026-07-26 |
+| Context | `network_mode` had been stored, displayed and audited since v0.x while nothing ever read it (D-004). An operator could see "private_mesh" on the Settings page and conclude the instance was restricted, when it answered anyone who could reach the port. Making it real is not simply "check the source IP": behind the shipped chain (client → platform proxy → nginx → api) the API's peer is always the proxy, and the only record of the real client is `X-Forwarded-For` — a caller-supplied header. An access rule built naively on it is worse than none, because `X-Forwarded-For: 100.64.0.5` becomes the key and the operator believes they are protected. |
+| Decision | Enforcement is a **separate flag**, `tailnet_only`, not a third `network_mode`: "what I meant" and "what the server refuses" are different claims and merging them is how a label gets mistaken for a lock. It is **off by default**. The client address is resolved by walking the forwarded chain from the right and stopping at the first address outside `TRUSTED_PROXIES` — anything a caller invented sits further left and is never reached. A Tailscale address is **never** accepted as a trusted proxy, whatever the operator configures, since that is the identity being authenticated. When the client cannot be established the request is **denied**, and the Settings page says the setting is not protecting anything rather than showing a tick. Three lockout guards: enabling is refused with `409` from an address that would be blocked, loopback and `/health` always pass, and `ACCESS_ENFORCEMENT=off` is a documented recovery path. |
+| Consequences | D-004 is closed in the sense that matters — there is now a control that actually refuses traffic, and it fails closed. It is explicitly documented as the *second* lock: the one that holds is not publishing the port, because a service that is not listening has no bypass surface, and a hostname is not a secret (Certificate Transparency publishes every name you get a certificate for). The cost is a configuration dependency: `TRUSTED_PROXIES` must match the real chain, and a wrong value shows up as "cannot identify the caller" rather than as silent exposure — which is the failure direction worth having. `network_mode` remains intent-only; collapsing the two is left alone deliberately so existing stores keep their meaning. |
+
+---
+
 ## How to add an ADR
 
 1. Increment `ADR-NNN`.

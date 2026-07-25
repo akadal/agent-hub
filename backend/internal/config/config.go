@@ -29,6 +29,12 @@ type Config struct {
 	TailscaleTailnet string // empty or "-" = key owner's default tailnet
 	// AuditMaxEvents is how many audit rows the file store keeps. 0 = default.
 	AuditMaxEvents int
+	// TrustedProxies are CIDRs of reverse proxies allowed to set the client
+	// address via X-Forwarded-For. Empty = the API's built-in private ranges.
+	TrustedProxies []string
+	// AccessEnforcementDisabled turns the tailnet-only guard into a no-op.
+	// The recovery path for an operator who locked themselves out.
+	AccessEnforcementDisabled bool
 }
 
 // Load reads configuration from environment variables with safe local defaults.
@@ -78,6 +84,21 @@ func Load() Config {
 			auditMax = n
 		}
 	}
+	var trustedProxies []string
+	if v := strings.TrimSpace(os.Getenv("TRUSTED_PROXIES")); v != "" {
+		for _, part := range strings.Split(v, ",") {
+			if p := strings.TrimSpace(part); p != "" {
+				trustedProxies = append(trustedProxies, p)
+			}
+		}
+	}
+	// Any spelling of "off" disables enforcement; anything else leaves it on,
+	// because a typo here must not quietly unlock the instance.
+	enforcementOff := false
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("ACCESS_ENFORCEMENT"))) {
+	case "off", "false", "0", "no", "disabled":
+		enforcementOff = true
+	}
 	tsKey := strings.TrimSpace(os.Getenv("TAILSCALE_API_KEY"))
 	tsNet := strings.TrimSpace(os.Getenv("TAILSCALE_TAILNET"))
 	if tsNet == "" {
@@ -94,5 +115,7 @@ func Load() Config {
 		TailscaleAPIKey:            tsKey,
 		TailscaleTailnet:           tsNet,
 		AuditMaxEvents:             auditMax,
+		TrustedProxies:             trustedProxies,
+		AccessEnforcementDisabled:  enforcementOff,
 	}
 }

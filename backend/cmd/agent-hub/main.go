@@ -24,6 +24,21 @@ func main() {
 	if err != nil {
 		log.Fatalf("open store: %v", err)
 	}
+	// A malformed TRUSTED_PROXIES must stop the process: starting with the
+	// entry silently dropped would leave an access rule narrower or wider than
+	// the operator wrote, with nothing to show for it.
+	trustedProxies := api.DefaultTrustedProxies()
+	if len(cfg.TrustedProxies) > 0 {
+		p, err := api.ParsePrefixes(cfg.TrustedProxies)
+		if err != nil {
+			log.Fatalf("TRUSTED_PROXIES: %v", err)
+		}
+		trustedProxies = p
+	}
+	if cfg.AccessEnforcementDisabled {
+		log.Printf("ACCESS_ENFORCEMENT=off — the tailnet-only setting is not enforced")
+	}
+
 	if cfg.AuditMaxEvents > 0 {
 		st.SetAuditLimit(cfg.AuditMaxEvents)
 	}
@@ -36,11 +51,13 @@ func main() {
 
 	tokens := auth.NewTokenService(cfg.JWTSecret, cfg.JWTAccessTTL)
 	srv := &api.Server{
-		Store:            st,
-		Tokens:           tokens,
-		Log:              log.Default(),
-		TailscaleAPIKey:  cfg.TailscaleAPIKey,
-		TailscaleTailnet: cfg.TailscaleTailnet,
+		Store:                     st,
+		Tokens:                    tokens,
+		Log:                       log.Default(),
+		TrustedProxies:            trustedProxies,
+		AccessEnforcementDisabled: cfg.AccessEnforcementDisabled,
+		TailscaleAPIKey:           cfg.TailscaleAPIKey,
+		TailscaleTailnet:          cfg.TailscaleTailnet,
 	}
 
 	addr := cfg.HTTPAddr

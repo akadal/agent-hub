@@ -41,12 +41,13 @@ Tailscale (or any VPN) can sit under your network path, but **it is not required
 | Terminal | Interactive xterm.js UI, **tmux-backed** so sessions survive disconnects, plus a one-shot `exec` API |
 | Mobile | Sheet picker, always-visible session strip, and a soft-key bar (Esc / Tab / sticky Ctrl / `^C` / arrows) so a phone keyboard can actually drive a shell |
 | Appearance | Light, dark or follow-the-system — terminal palette included |
+| Access control | Optional **tailnet-only** mode: refuse every request that did not come from your Tailscale network, login included. Off by default, and it will not let you lock yourself out |
 | Reconnect | WebSocket + SSH keepalives and auto-reattach after phone sleep or network flap |
 | Audit | Append-only log of logins, machine/user/grant changes and terminal use, with an operator UI and CSV export |
 | Ops | Docker Compose (`api`, `web`, optional `ssh-target` for e2e), graceful shutdown, version reported by `/health` and the UI |
 
-**Not in this release (planned):** Tailscale identity login — local JWT is the
-only auth path today. Per-terminal permission grants; today a grant is per
+**Not in this release (planned):** Tailscale identity login — tailnet-only
+*access control* ships, but who you are is still a local account. Per-terminal permission grants; today a grant is per
 machine and terminals inherit it. Everything known and deliberately deferred is
 listed in [`docs/debt.md`](docs/debt.md).
 
@@ -204,6 +205,8 @@ there — the app has no hidden knobs. The ones that matter most:
 | `VITE_API_BASE_URL` | Browser-facing API origin. **Leave empty** for same-origin (`web` proxies `/api`) — the recommended setup behind any reverse proxy |
 | `API_PORT` / `WEB_PORT` / `SSH_TARGET_PORT` | Host publish ports (defaults `27341` / `27342` / `27343`) |
 | `ACCESS_DEFAULT_TAILSCALE_ONLY` | Network policy default; `false` for open local demos |
+| `TRUSTED_PROXIES` | CIDRs of the reverse proxies in front of the API. Needed for tailnet-only mode to identify callers; unset = loopback + private ranges |
+| `ACCESS_ENFORCEMENT` | `off` disables the tailnet-only check — the recovery path if you lock yourself out |
 | `TAILSCALE_API_KEY` | Optional API access token that enables **Machines → Import from Tailscale** |
 | `TAILSCALE_TAILNET` | Tailnet for that key; `-` (default) means the key owner's tailnet |
 
@@ -268,7 +271,7 @@ cd backend && AGENT_HUB_SSH_KEY_FILE=~/.ssh/id_ed25519 go run ./cmd/sshdiag 10.0
 
 - Bootstrap credentials in `.env.example` are for **local demos only** — change `JWT_SECRET` and `BOOTSTRAP_ADMIN_PASSWORD` before any shared or internet-facing deploy. The API warns at startup while they are unchanged.
 - SSH passwords, private keys and key passphrases are **encrypted at rest** (AES-256-GCM) inside the store, so the store file alone is not enough. The API has to open them unattended, so the key is reachable by it: by default `credential.key` in the same `0700` data directory. Set `CREDENTIAL_KEY` to keep it elsewhere.
-- Prefer private networks (VPN / Tailscale / LAN) for production access; TLS and reverse proxies are operator-provided. The in-app network policy records intent — it does not block traffic.
+- Prefer private networks (VPN / Tailscale / LAN) for production access; TLS and reverse proxies are operator-provided. **Settings → Tailnet-only access** enforces this in the app (off by default), but the control that actually holds is not publishing the port: serve the app on the tailnet and there is nothing for the internet to reach. Both are in [`docs/ops.md`](docs/ops.md) §5d. A hostname is not a secret — every name you obtain a certificate for is published in Certificate Transparency logs.
 - Reaching a host over **Tailscale SSH** (port 22 on a `100.x` address) authenticates by tailnet ACL, not by the credential you stored. See [`docs/ops.md`](docs/ops.md) §6b.
 - Failed logins are throttled **per account** (10 per 5 minutes, then `429`), because behind a reverse proxy every request shares the proxy's address. Broad request-rate limiting belongs at your edge.
 - Full policy, including what is *not* a vulnerability report: [`SECURITY.md`](SECURITY.md).
@@ -293,7 +296,7 @@ Participation is covered by the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 **v1.1.0 — feature-complete and self-hostable.** Login, users and per-machine permissions, machine inventory with connection diagnostics, password or key SSH auth with credentials encrypted at rest, a multi-session tmux-backed workspace that works on a phone, an audit log with export, and Compose packaging all work end to end.
 
-Known gaps are tracked openly in [`docs/debt.md`](docs/debt.md) — the notable ones: network policy is recorded intent rather than enforcement (secure the edge yourself), Tailscale identity login is not implemented, and terminal grants are inherited from the machine rather than set per session.
+Known gaps are tracked openly in [`docs/debt.md`](docs/debt.md) — the notable ones: Tailscale identity *login* is not implemented (tailnet-only access control is, but authentication is still local JWT), and terminal grants are inherited from the machine rather than set per session.
 
 ---
 

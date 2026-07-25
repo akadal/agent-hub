@@ -214,6 +214,25 @@ export type AuditEvent = {
 
 export type AccessSettings = {
   network_mode: 'private_mesh' | 'open' | string
+  /** Enforced: reject requests that did not come from a Tailscale address. */
+  tailnet_only?: boolean
+  /**
+   * What the server can tell about *this* request. Without it the operator
+   * cannot judge the switch — a lock that cannot identify callers is not one.
+   * Only returned by GET; PATCH echoes the stored settings.
+   */
+  access?: {
+    /** The address the API resolved for you, '' when it could not. */
+    client_ip: string
+    /** False when a proxy in front is not forwarding the client address. */
+    client_ip_known: boolean
+    client_on_tailnet: boolean
+    /** Whether *this* caller would still get in with the lock on. Server-side
+     *  so the loopback exemption is not re-derived (and got wrong) here. */
+    client_allowed: boolean
+    /** ACCESS_ENFORCEMENT=off — the setting is stored but not applied. */
+    enforcement_disabled: boolean
+  }
 }
 
 export async function listGrants(token: string): Promise<MachineGrant[]> {
@@ -269,7 +288,7 @@ export async function getSettings(token: string): Promise<AccessSettings> {
 
 export async function updateSettings(
   token: string,
-  body: { network_mode: string },
+  body: { network_mode?: string; tailnet_only?: boolean },
 ): Promise<AccessSettings> {
   const res = await fetch(`${API_BASE}/api/settings`, {
     method: 'PATCH',

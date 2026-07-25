@@ -268,7 +268,7 @@ func TestAudit_andSettings(t *testing.T) {
 	if stt.NetworkMode != store.NetworkPrivateMesh {
 		t.Fatalf("default=%s", stt.NetworkMode)
 	}
-	stt, err = st.UpdateSettings(store.NetworkOpen)
+	stt, err = st.UpdateSettings(store.NetworkOpen, nil)
 	if err != nil || stt.NetworkMode != store.NetworkOpen {
 		t.Fatalf("update: %+v %v", stt, err)
 	}

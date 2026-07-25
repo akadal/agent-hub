@@ -41,6 +41,9 @@ services:
       CREDENTIAL_KEY: ${CREDENTIAL_KEY:-}
       AUDIT_MAX_EVENTS: ${AUDIT_MAX_EVENTS:-}
       ACCESS_DEFAULT_TAILSCALE_ONLY: ${ACCESS_DEFAULT_TAILSCALE_ONLY:-false}
+      # Needed only for Settings → Tailnet-only access (see docs/ops.md §5d).
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}
+      ACCESS_ENFORCEMENT: ${ACCESS_ENFORCEMENT:-}
       # Optional: Machines page "Import from Tailscale" (API access token, not auth key)
       TAILSCALE_API_KEY: ${TAILSCALE_API_KEY:-}
       TAILSCALE_TAILNET: ${TAILSCALE_TAILNET:-}

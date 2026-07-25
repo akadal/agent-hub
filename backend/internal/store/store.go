@@ -698,7 +698,7 @@ func (s *Store) GetSettings() AccessSettings {
 }
 
 // UpdateSettings patches network mode (empty fields keep current).
-func (s *Store) UpdateSettings(networkMode string) (AccessSettings, error) {
+func (s *Store) UpdateSettings(networkMode string, tailnetOnly *bool) (AccessSettings, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if networkMode != "" {
@@ -708,6 +708,9 @@ func (s *Store) UpdateSettings(networkMode string) (AccessSettings, error) {
 		default:
 			return AccessSettings{}, fmt.Errorf("network_mode must be %s or %s", NetworkPrivateMesh, NetworkOpen)
 		}
+	}
+	if tailnetOnly != nil {
+		s.settings.TailnetOnly = *tailnetOnly
 	}
 	if err := s.saveLocked(); err != nil {
 		return AccessSettings{}, err

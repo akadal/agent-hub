@@ -9,6 +9,7 @@ import {
   type AccessSettings,
 } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
+import { cn } from '@/lib/utils'
 
 export function SettingsPage() {
   const { token, user } = useAuth()
@@ -24,6 +25,8 @@ export function SettingsPage() {
   const [pwError, setPwError] = useState<string | null>(null)
   const [pwDone, setPwDone] = useState(false)
   const [pwBusy, setPwBusy] = useState(false)
+  const [lockBusy, setLockBusy] = useState(false)
+  const [lockError, setLockError] = useState<string | null>(null)
 
   const refresh = useCallback(async () => {
     if (!token) return
@@ -59,6 +62,22 @@ export function SettingsPage() {
     }
   }
 
+  async function onToggleTailnetOnly(next: boolean) {
+    if (!token || !isAdmin) return
+    setLockBusy(true)
+    setLockError(null)
+    try {
+      await updateSettings(token, { tailnet_only: next })
+      // Re-read rather than trust the PATCH echo: the diagnostic block only
+      // comes back from GET, and it is the part worth looking at.
+      await refresh()
+    } catch (err) {
+      setLockError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setLockBusy(false)
+    }
+  }
+
   async function onChangePassword(e: FormEvent) {
     e.preventDefault()
     if (!token) return
@@ -84,6 +103,12 @@ export function SettingsPage() {
       setPwBusy(false)
     }
   }
+
+  const access = settings?.access
+  // "Real" means the lock would actually refuse someone: enforcement is live
+  // and the server can identify callers. Anything else gets a warning, not a tick.
+  const lockIsReal =
+    Boolean(access?.client_ip_known) && !access?.enforcement_disabled
 
   return (
     <div className="mx-auto flex max-w-2xl flex-col gap-6">
@@ -193,6 +218,92 @@ export function SettingsPage() {
           {error}
         </p>
       ) : null}
+
+      <section className="flex flex-col gap-3 rounded-lg border border-border bg-card p-4">
+        <div>
+          <h2 className="text-sm font-semibold">Tailnet-only access</h2>
+          <p className="mt-1 text-xs text-muted-foreground">
+            When on, this server refuses every request that did not come from
+            its Tailscale network — phones included, as long as the Tailscale
+            app is connected. Off by default.
+          </p>
+        </div>
+
+        <label className="flex items-start gap-3 rounded-md border border-border p-3 text-sm">
+          <input
+            type="checkbox"
+            className="mt-0.5 size-4 accent-primary"
+            checked={Boolean(settings?.tailnet_only)}
+            disabled={!isAdmin || lockBusy}
+            onChange={(e) => void onToggleTailnetOnly(e.target.checked)}
+          />
+          <span>
+            <span className="font-medium">
+              Only accept requests from the tailnet
+            </span>
+            <span className="mt-0.5 block text-xs text-muted-foreground">
+              You cannot switch this on from an address that would be blocked —
+              the server refuses rather than lock you out.
+            </span>
+          </span>
+        </label>
+
+        {access ? (
+          <div
+            className={cn(
+              'rounded-md border p-3 text-xs',
+              lockIsReal
+                ? 'border-emerald-500/40 bg-emerald-500/10 text-foreground'
+                : 'border-amber-500/50 bg-amber-500/10 text-foreground',
+            )}
+            role="status"
+          >
+            {access.enforcement_disabled ? (
+              <p>
+                <strong>Not enforced.</strong> This server runs with{' '}
+                <code>ACCESS_ENFORCEMENT=off</code>, so the setting is stored
+                but ignored. Remove that variable to make it take effect.
+              </p>
+            ) : !access.client_ip_known ? (
+              <p>
+                <strong>This setting cannot protect you yet.</strong> The server
+                cannot tell which address requests come from — a reverse proxy
+                in front of it is not forwarding the client. Set{' '}
+                <code>TRUSTED_PROXIES</code> to those proxies, then reload this
+                page.
+              </p>
+            ) : (
+              <p>
+                The server sees you at{' '}
+                <code className="font-mono">{access.client_ip}</code> —{' '}
+                {access.client_on_tailnet
+                  ? 'inside the tailnet.'
+                  : access.client_allowed
+                    ? 'on this machine, which stays allowed either way.'
+                    : 'not a Tailscale address, so turning this on would lock you out from here.'}
+              </p>
+            )}
+          </div>
+        ) : null}
+
+        {lockError ? (
+          <p className="text-sm text-destructive" role="alert">
+            {lockError}
+          </p>
+        ) : null}
+
+        <p className="text-xs text-muted-foreground">
+          This is a second lock. The one that actually holds is not publishing
+          the port at all — serve the app on the tailnet and there is nothing
+          for the internet to reach. See <code>docs/ops.md</code> §5d.
+        </p>
+
+        {!isAdmin ? (
+          <p className="text-xs text-muted-foreground">
+            Only admins can change this.
+          </p>
+        ) : null}
+      </section>
 
       <form
         onSubmit={(e) => void onSave(e)}

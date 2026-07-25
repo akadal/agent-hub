@@ -237,6 +237,103 @@ audited action.
 
 ---
 
+## 5d. Restricting access to your tailnet
+
+There are two locks here and they are not equal. Use the first; the second is
+a backstop.
+
+### Lock 1 — do not publish the port (this is the one that holds)
+
+Nothing reaches a service that is not listening on the internet. Serve the app
+on the tailnet and there is no attack surface to reason about:
+
+```bash
+# On the host running the stack
+tailscale serve --bg 27342
+tailscale serve status
+```
+
+The app is then reachable at `https://<node>.<tailnet>.ts.net` from any device
+signed into the tailnet — iPhone included, as long as the Tailscale app is
+connected — with a certificate Tailscale provisions for you.
+
+Then remove the public route:
+
+- **Coolify**: detach the public domain from the `web` service.
+- **Plain compose**: drop the `ports:` publish for `web`, or bind it to
+  loopback (`127.0.0.1:27342:80`) so only `tailscale serve` can reach it.
+
+Do **not** enable Tailscale Funnel: that deliberately re-exposes the service to
+the internet, which is the opposite of what this is for.
+
+Note the name is not the secret. Any hostname you obtain a public certificate
+for appears in Certificate Transparency logs and is discoverable within
+minutes. Access control is what protects an instance; an unguessable URL is not
+access control.
+
+### Lock 2 — the in-app setting
+
+**Settings → Tailnet-only access.** Off by default. When on, the API refuses
+any request whose client address is not in Tailscale's ranges
+(`100.64.0.0/10`, `fd7a:115c:a1e0::/48`). The check sits in front of everything
+including login, so a caller from outside cannot even attempt a password.
+
+This exists for the day Lock 1 slips — a domain re-attached, a port
+re-published. On its own it is weaker, because it depends on the server being
+able to see who is calling.
+
+**It cannot see that by default behind a proxy.** The API's peer is the proxy,
+not your phone. The client address has to come from `X-Forwarded-For`, and that
+header is caller-supplied, so it is only usable when the API knows which
+addresses are its own proxies:
+
+```bash
+# CIDRs of every reverse proxy in front of the API
+TRUSTED_PROXIES=172.16.0.0/12,10.0.0.0/8
+```
+
+Unset, it defaults to loopback plus the private ranges (`127.0.0.0/8`,
+`::1/128`, `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`), which covers a
+normal Docker/Coolify chain. Tailscale's own ranges are never treated as
+proxies — an address the rule authenticates must not also be allowed to speak
+for someone else.
+
+The API walks the forwarded chain from the right and stops at the first address
+that is not one of your proxies. Entries a caller invented sit further left and
+are never reached, so `X-Forwarded-For: 100.64.0.5` from the internet does not
+get in. Verify it yourself:
+
+```bash
+# From the host, with the setting on. Expect 403 then 200.
+curl -so /dev/null -w '%{http_code}\n' -H 'X-Forwarded-For: 203.0.113.9' \
+  -H "Authorization: Bearer $TOKEN" http://127.0.0.1:27341/api/machines
+curl -so /dev/null -w '%{http_code}\n' -H 'X-Forwarded-For: 100.64.0.7' \
+  -H "Authorization: Bearer $TOKEN" http://127.0.0.1:27341/api/machines
+```
+
+If the API cannot determine the client at all, it **denies** rather than
+guesses, and the Settings page says so instead of showing a reassuring tick.
+That is the state to fix with `TRUSTED_PROXIES`, not to ignore.
+
+### Not getting locked out
+
+- The setting cannot be switched on from an address that would be blocked. The
+  API answers `409` and explains, rather than accepting a change that ends your
+  own session.
+- Loopback always passes, so an operator on the host keeps access and the
+  container health check keeps working.
+- `/health` stays reachable, so your platform does not kill the container.
+- If you are locked out anyway, the escape hatch is an environment variable:
+
+  ```bash
+  ACCESS_ENFORCEMENT=off   # then restart the api
+  ```
+
+  The setting stays stored but is not applied, and the API logs a line at
+  startup saying so. Turn it off again once you can reach the UI.
+
+---
+
 ## 6. Mobile access notes
 
 - Mobile browsers need a **deployed or otherwise reachable** instance (not only the laptop’s `localhost` unless the phone shares that network path, e.g. same Tailscale).

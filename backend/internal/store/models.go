@@ -138,13 +138,22 @@ const (
 	NetworkOpen        = "open"
 )
 
-// AccessSettings is the global access-policy singleton (MVP).
-// Edge enforcement is operator reverse-proxy / mesh; this records intent.
+// AccessSettings is the global access-policy singleton.
+//
+// NetworkMode records *intent* — what the operator says this instance is for.
+// TailnetOnly is the one field that is actually enforced, which is why it is a
+// separate flag rather than a third network mode: "what I meant" and "what the
+// server refuses" are different claims and conflating them is how an operator
+// ends up believing a label is a lock.
 type AccessSettings struct {
 	NetworkMode string `json:"network_mode"` // private_mesh | open
+	// TailnetOnly rejects requests that did not come from a Tailscale address.
+	// Off by default: switching it on without a tailnet is a self-lockout.
+	TailnetOnly bool `json:"tailnet_only"`
 }
 
-// DefaultAccessSettings is the product default (private mesh).
+// DefaultAccessSettings is the product default: private-mesh intent, and no
+// enforcement until an operator deliberately turns it on.
 func DefaultAccessSettings() AccessSettings {
-	return AccessSettings{NetworkMode: NetworkPrivateMesh}
+	return AccessSettings{NetworkMode: NetworkPrivateMesh, TailnetOnly: false}
 }
