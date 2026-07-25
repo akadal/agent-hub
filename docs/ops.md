@@ -57,7 +57,25 @@ If **both** web and api have the same domain (`agents.example`), Coolify may sen
 - After env change: restart/redeploy **api**  
 - ssh-target: no public domain
 
-**Remote channel:** SSH to registered IP/hostname. **Tailscale is not required** for this path (optional mesh later).
+**Remote channel:** SSH to registered IP/hostname. The **API process** (not your laptop browser) must be able to open TCP+SSH to that address.
+
+### Tailscale `100.x` from Docker (important)
+
+| Where API runs | SSH to `100.x` |
+|----------------|----------------|
+| Compose `api` container (Docker Desktop macOS) | Often **broken** — handshake `i/o timeout` from bridge IP |
+| API on host (`./scripts/run-api-host.sh`) | **Works** if host is on the tailnet |
+| Coolify / VPS | Works only if **that host** has Tailscale (or use LAN/public SSH) |
+
+**Local Mac + Tailscale machines:**
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.host-api.yml up -d --build web ssh-target
+./scripts/run-api-host.sh   # terminal 2 — uses ./data, listens :27341
+# UI: http://localhost:27342  (or WEB_PORT)
+```
+
+If you see `read tcp 10.x/172.x→100.x:22: i/o timeout`, the API is still inside Docker without a tailnet path — switch to host API (above) or put Tailscale on the API host.
 
 **Optional — Import from Tailscale (Machines UI)**
 

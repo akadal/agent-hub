@@ -87,7 +87,7 @@ func dialRaw(t Target, openDeadline time.Time) (*ssh.Client, net.Conn, error) {
 
 	raw, err := net.DialTimeout("tcp", addr, dialTimeout)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("%w%s", err, tailscaleHint(t.Address))
 	}
 	if tcp, ok := raw.(*net.TCPConn); ok {
 		_ = tcp.SetKeepAlive(true)
@@ -100,9 +100,28 @@ func dialRaw(t Target, openDeadline time.Time) (*ssh.Client, net.Conn, error) {
 	cc, chans, reqs, err := ssh.NewClientConn(raw, addr, clientConfig(t))
 	if err != nil {
 		_ = raw.Close()
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("%w%s", err, tailscaleHint(t.Address))
 	}
 	return ssh.NewClient(cc, chans, reqs), raw, nil
+}
+
+// tailscaleHint appends actionable text when dialing CGNAT / Tailscale ranges
+// from a network that cannot complete the handshake (common: Docker Desktop
+// bridge → 100.x, or a Coolify host that is not on the tailnet).
+func tailscaleHint(address string) string {
+	ip := net.ParseIP(address)
+	if ip == nil {
+		return ""
+	}
+	// Tailscale / CGNAT: 100.64.0.0/10
+	if ip4 := ip.To4(); ip4 != nil {
+		if ip4[0] == 100 && ip4[1] >= 64 && ip4[1] <= 127 {
+			return " (Tailscale IP: the Agent Hub *API process* must route to the tailnet — " +
+				"Docker bridge often cannot. Run API on the host with scripts/run-api-host.sh " +
+				"and docker-compose.host-api.yml, or install Tailscale on the API host)"
+		}
+	}
+	return ""
 }
 
 // ExecResult is the outcome of a one-shot remote command.

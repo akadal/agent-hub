@@ -1,0 +1,33 @@
+# Overlay: run the Go API on the Docker *host* (where Tailscale lives) so SSH
+# to 100.x addresses works. Docker Desktop macOS cannot reliably handshake
+# Tailscale from a bridge container (source 10.x/172.x → 100.x i/o timeout).
+#
+# Usage:
+#   1. docker compose -f docker-compose.yml -f docker-compose.host-api.yml up -d --build web ssh-target
+#   2. ./scripts/run-api-host.sh
+#   3. Open http://localhost:${WEB_PORT:-27342}
+#
+# Data: scripts/run-api-host.sh uses ./data (imports from api-data volume if empty).
+
+services:
+  # Placeholder so the project still has an "api" service name if needed.
+  # Real API is ./scripts/run-api-host.sh on the host (Tailscale-capable).
+  api:
+    build: !reset null
+    image: alpine:3.20
+    command: ["sleep", "infinity"]
+    ports: !reset []
+    healthcheck: !reset {}
+    environment: !reset {}
+    volumes: !reset []
+    depends_on: !reset []
+    restart: "no"
+
+  web:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      API_UPSTREAM: host.docker.internal:27341
+    depends_on: !override
+      ssh-target:
+        condition: service_started
