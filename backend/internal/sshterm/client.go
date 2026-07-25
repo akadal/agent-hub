@@ -21,51 +21,88 @@ type Target struct {
 }
 
 // dialTimeout is only for the initial TCP connect, not session lifetime.
-const dialTimeout = 15 * time.Second
+const dialTimeout = 12 * time.Second
 
 // openTimeout caps the whole OpenSession path (dial + auth + pty + shell start).
-// Without this, a hung Tailscale/sshd handshake leaves the browser on a black
-// xterm forever showing only "connected" (WS up, no ready/stdout).
-const openTimeout = 20 * time.Second
+// Applied as a deadline on the underlying TCP conn so hung Tailscale/sshd
+// handshakes unblock instead of sitting until an outer timer fires.
+const openTimeout = 25 * time.Second
 
 // keepaliveInterval sends SSH-level keepalives so idle shells are not dropped.
 const keepaliveInterval = 30 * time.Second
 
 var safeSessionName = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 
-// Dial opens an authenticated SSH client with TCP + SSH keepalives.
-func Dial(t Target) (*ssh.Client, error) {
+func (t Target) normalized() Target {
 	if t.Port <= 0 {
 		t.Port = 22
 	}
 	if t.User == "" {
 		t.User = "root"
 	}
-	cfg := &ssh.ClientConfig{
+	return t
+}
+
+func (t Target) addr() string {
+	t = t.normalized()
+	return net.JoinHostPort(t.Address, fmt.Sprintf("%d", t.Port))
+}
+
+func clientConfig(t Target) *ssh.ClientConfig {
+	t = t.normalized()
+	pass := t.Password
+	return &ssh.ClientConfig{
 		User: t.User,
 		Auth: []ssh.AuthMethod{
-			ssh.Password(t.Password),
+			ssh.Password(pass),
+			// Tailscale SSH and some sshd configs prefer keyboard-interactive.
+			ssh.KeyboardInteractive(func(user, instruction string, questions []string, echos []bool) ([]string, error) {
+				_ = user
+				_ = instruction
+				_ = echos
+				answers := make([]string, len(questions))
+				for i := range questions {
+					answers[i] = pass
+				}
+				return answers, nil
+			}),
 		},
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
 		Timeout:         dialTimeout,
 	}
-	addr := net.JoinHostPort(t.Address, fmt.Sprintf("%d", t.Port))
+}
+
+// Dial opens an authenticated SSH client with TCP + SSH keepalives.
+func Dial(t Target) (*ssh.Client, error) {
+	client, _, err := dialRaw(t, time.Time{})
+	return client, err
+}
+
+// dialRaw dials and authenticates. If openDeadline is non-zero, it is set on the
+// TCP connection for the handshake (and cleared before return on success).
+// The raw conn is returned so callers can keep a deadline during PTY/start.
+func dialRaw(t Target, openDeadline time.Time) (*ssh.Client, net.Conn, error) {
+	t = t.normalized()
+	addr := t.addr()
 
 	raw, err := net.DialTimeout("tcp", addr, dialTimeout)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if tcp, ok := raw.(*net.TCPConn); ok {
 		_ = tcp.SetKeepAlive(true)
 		_ = tcp.SetKeepAlivePeriod(keepaliveInterval)
 	}
+	if !openDeadline.IsZero() {
+		_ = raw.SetDeadline(openDeadline)
+	}
 
-	cc, chans, reqs, err := ssh.NewClientConn(raw, addr, cfg)
+	cc, chans, reqs, err := ssh.NewClientConn(raw, addr, clientConfig(t))
 	if err != nil {
 		_ = raw.Close()
-		return nil, err
+		return nil, nil, err
 	}
-	return ssh.NewClient(cc, chans, reqs), nil
+	return ssh.NewClient(cc, chans, reqs), raw, nil
 }
 
 // ExecResult is the outcome of a one-shot remote command.
@@ -114,6 +151,7 @@ type Session struct {
 	session *ssh.Session
 	stdin   io.WriteCloser
 	stdout  io.Reader
+	raw     net.Conn
 
 	stopOnce sync.Once
 	stopKA   chan struct{}
@@ -123,47 +161,28 @@ type Session struct {
 // If remoteSession is non-empty, attaches/creates a tmux session of that name
 // so reconnects (other device/tab) resume the same shell.
 //
-// The whole open path is bounded by openTimeout so a hung remote never leaves
-// the WebSocket bridge stuck before the first "ready" frame.
+// The whole open path is bounded by openTimeout via TCP deadline so a hung
+// remote never leaves the WebSocket bridge stuck before the first "ready" frame.
 func OpenSession(t Target, remoteSession string, cols, rows int) (*Session, error) {
-	type result struct {
-		s   *Session
-		err error
-	}
-	ch := make(chan result, 1)
-	go func() {
-		s, err := openSession(t, remoteSession, cols, rows)
-		ch <- result{s, err}
-	}()
-	select {
-	case r := <-ch:
-		return r.s, r.err
-	case <-time.After(openTimeout):
-		// Best-effort: if openSession finishes later it will close itself only
-		// when the caller drops the result — race the late success path.
-		go func() {
-			if r := <-ch; r.s != nil {
-				_ = r.s.Close()
-			}
-		}()
-		return nil, fmt.Errorf("ssh open timed out after %s (host %s:%d user %s)",
-			openTimeout, t.Address, t.Port, t.User)
-	}
-}
-
-func openSession(t Target, remoteSession string, cols, rows int) (*Session, error) {
+	t = t.normalized()
 	if cols <= 0 {
 		cols = 80
 	}
 	if rows <= 0 {
 		rows = 24
 	}
-	client, err := Dial(t)
+	deadline := time.Now().Add(openTimeout)
+
+	client, raw, err := dialRaw(t, deadline)
 	if err != nil {
 		return nil, fmt.Errorf("ssh dial: %w", err)
 	}
+	// Always clear the open-phase deadline once we leave (success or fail).
+	clearDeadline := func() { _ = raw.SetDeadline(time.Time{}) }
+
 	sess, err := client.NewSession()
 	if err != nil {
+		clearDeadline()
 		client.Close()
 		return nil, fmt.Errorf("ssh session: %w", err)
 	}
@@ -177,6 +196,7 @@ func openSession(t Target, remoteSession string, cols, rows int) (*Session, erro
 	// RequestPty(term, height, width, modes) — note h,w order.
 	if err := sess.RequestPty("xterm-256color", rows, cols, modes); err != nil {
 		sess.Close()
+		clearDeadline()
 		client.Close()
 		return nil, fmt.Errorf("request pty: %w", err)
 	}
@@ -189,12 +209,14 @@ func openSession(t Target, remoteSession string, cols, rows int) (*Session, erro
 	stdin, err := sess.StdinPipe()
 	if err != nil {
 		sess.Close()
+		clearDeadline()
 		client.Close()
 		return nil, err
 	}
 	stdout, err := sess.StdoutPipe()
 	if err != nil {
 		sess.Close()
+		clearDeadline()
 		client.Close()
 		return nil, err
 	}
@@ -203,15 +225,20 @@ func openSession(t Target, remoteSession string, cols, rows int) (*Session, erro
 	// See remoteShellCmd: macOS SSH often lacks Homebrew on PATH.
 	if err := sess.Start(remoteShellCmd(remoteSession)); err != nil {
 		sess.Close()
+		clearDeadline()
 		client.Close()
 		return nil, fmt.Errorf("start shell: %w", err)
 	}
+
+	// Open succeeded — remove deadline so the interactive session can live forever.
+	clearDeadline()
 
 	s := &Session{
 		client:  client,
 		session: sess,
 		stdin:   stdin,
 		stdout:  stdout,
+		raw:     raw,
 		stopKA:  make(chan struct{}),
 	}
 	go s.keepaliveLoop()

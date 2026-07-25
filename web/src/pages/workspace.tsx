@@ -876,6 +876,8 @@ function SessionTerminal({
     let reconnectTimer = 0
     let reconnectAttempt = 0
     let hadReady = false
+    /** True once we saw a server "error" for this socket (e.g. ssh open timeout). */
+    let openFailed = false
     let pingTimer = 0
     let pokeTimer = 0
     let sawStdout = false
@@ -919,6 +921,7 @@ function SessionTerminal({
       clearPoke()
       clearOpenWatch()
       sawStdout = false
+      openFailed = false
 
       const gen = ++socketGen
       // Drop previous socket without triggering its reconnect path.
@@ -972,18 +975,25 @@ function SessionTerminal({
         // If the API never sends ready/error (hung SSH), surface it instead of
         // infinite black screen with a blinking cursor.
         openWatchTimer = window.setTimeout(() => {
-          if (disposed || gen !== socketGen || hadReady) return
+          if (disposed || gen !== socketGen || hadReady || openFailed) return
+          openFailed = true
           setStatus('error')
           term.writeln(
             '\x1b[31m[ssh open timed out — no shell from server. Check machine SSH/Tailscale, then New session.]\x1b[0m',
           )
-        }, 25_000)
+          try {
+            ws.close()
+          } catch {
+            /* ignore */
+          }
+        }, 30_000)
       }
 
       ws.onerror = () => {
         if (disposed || gen !== socketGen) return
-        // onclose will schedule reconnect; surface transient error state.
-        setStatus(hadReady ? 'reconnecting…' : 'error')
+        // onclose decides whether to reconnect.
+        if (!hadReady) setStatus('error')
+        else setStatus('reconnecting…')
       }
 
       ws.onclose = () => {
@@ -994,15 +1004,21 @@ function SessionTerminal({
         wsRef.current = null
         if (currentWs === ws) currentWs = null
 
+        // CRITICAL: do not auto-reconnect after a failed SSH open.
+        // Reconnecting every few seconds piles hung Tailscale/SSH dials and
+        // produces the "timeout / timeout / timeout" spam the user saw.
+        if (!hadReady || openFailed) {
+          setStatus('error')
+          return
+        }
+
         // Exponential backoff: 1s, 2s, 4s … cap 15s. Phone sleep often needs a few tries.
         const delay = Math.min(1000 * 2 ** reconnectAttempt, 15_000)
         reconnectAttempt += 1
         setStatus('reconnecting…')
-        if (hadReady) {
-          term.writeln(
-            `\x1b[33m[connection lost — reconnecting in ${Math.round(delay / 1000)}s…]\x1b[0m`,
-          )
-        }
+        term.writeln(
+          `\x1b[33m[connection lost — reconnecting in ${Math.round(delay / 1000)}s…]\x1b[0m`,
+        )
         reconnectTimer = window.setTimeout(() => {
           if (!disposed && gen === socketGen) connect()
         }, delay)
@@ -1024,13 +1040,18 @@ function SessionTerminal({
           } else if (msg.type === 'error') {
             clearOpenWatch()
             clearPoke()
+            openFailed = true
             setStatus('error')
             term.writeln(`\x1b[31m${msg.message ?? 'ssh error'}\x1b[0m`)
+            term.writeln(
+              '\x1b[33m[stopped auto-reconnect — click the session again or New session to retry]\x1b[0m',
+            )
           } else if (msg.type === 'status' && msg.message) {
             setStatus('opening ssh…')
             term.writeln(`\x1b[90m[${msg.message}]\x1b[0m`)
           } else if (msg.type === 'ready') {
             clearOpenWatch()
+            openFailed = false
             const resume = hadReady
             hadReady = true
             setStatus('ssh ready')
