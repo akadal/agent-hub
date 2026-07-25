@@ -116,10 +116,13 @@ echo "→ testing connection…"
 check_res="$(curl -sS -m 60 -X POST "$BASE/api/machines/$MACHINE_ID/check" \
   -H "Authorization: Bearer $TOKEN")" || die "check request failed"
 
-python3 - <<'PY' <<<"$check_res"
+# The response goes in as an argument, not on stdin: a heredoc script and a
+# here-string payload both claim stdin, and the payload wins — python then
+# tries to execute the JSON.
+python3 - "$check_res" <<'PY'
 import json, sys
 try:
-    r = json.loads(sys.stdin.read())
+    r = json.loads(sys.argv[1])
 except Exception as e:
     print("could not parse check response:", e); raise SystemExit(1)
 if r.get("ok"):
