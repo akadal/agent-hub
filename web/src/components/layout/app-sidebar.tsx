@@ -1,4 +1,5 @@
-import { NavLink } from 'react-router-dom'
+import { useEffect, useState } from 'react'
+import { NavLink } from 'react-router'
 import {
   ClipboardList,
   LayoutDashboard,
@@ -11,6 +12,7 @@ import {
 } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
+import { fetchHealth } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Separator } from '@/components/ui/separator'
@@ -37,6 +39,21 @@ export function AppSidebar({ onNavigate }: { onNavigate?: () => void }) {
   const { user } = useAuth()
   const isAdmin = user?.role === 'admin'
   const visible = navItems.filter((item) => !item.adminOnly || isAdmin)
+  const [serverVersion, setServerVersion] = useState<string | null>(null)
+
+  useEffect(() => {
+    let alive = true
+    fetchHealth()
+      .then((h) => {
+        if (alive) setServerVersion(h.version ?? null)
+      })
+      .catch(() => {
+        // A version line is decoration; a health blip must not break the nav.
+      })
+    return () => {
+      alive = false
+    }
+  }, [])
 
   return (
     <div className="flex h-full flex-col bg-sidebar text-sidebar-foreground">
@@ -74,8 +91,10 @@ export function AppSidebar({ onNavigate }: { onNavigate?: () => void }) {
         </nav>
       </ScrollArea>
       <Separator className="bg-sidebar-border" />
-      <div className="p-4 text-xs text-muted-foreground">
-        Machine → sessions · SSH
+      <div className="flex flex-col gap-0.5 p-4 text-xs text-muted-foreground">
+        <span>Machine → sessions · SSH</span>
+        {/* Which build is answering — the first thing a bug report needs. */}
+        {serverVersion ? <span>v{serverVersion}</span> : null}
       </div>
     </div>
   )

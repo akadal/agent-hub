@@ -129,17 +129,50 @@ cd web && npm install && npm run dev   # proxies /api and /health to :27341
 3. Put TLS and hostname in front via your reverse proxy / platform.
 4. Restrict ingress (prefer Tailscale or VPN; open WAN only with clear AccessPolicy intent).
 5. Verify `GET /health` and the web UI from a second device (e.g. phone).
+   The response carries the running version — check it after every deploy:
+
+   ```bash
+   curl -s https://your-host.example/health
+   # {"service":"agent-hub","status":"ok","version":"1.0.0 (84020fd)"}
+   ```
 
 Optional: hook git push to rebuild/redeploy on your platform of choice. Override ports with `API_PORT` / `WEB_PORT` env if needed.
+
+**Restarts and upgrades.** The api handles `SIGTERM`, so `docker compose
+restart|down|up -d` stops it cleanly instead of interrupting a write to
+`store.json`. Live terminals still drop — the SSH connections go with the
+process — but tmux keeps the remote shells alive, so reconnecting re-attaches
+them. Back up `DATA_DIR` (the `api-data` volume) before upgrading; it holds
+every machine, credential and grant.
 
 ---
 
 ## 4. Bootstrap (first install)
 
-- Create initial admin/local user (mechanism TBD with M0.5 / M1.*).
-- Confirm AccessPolicy default remains private-mesh/Tailscale-only unless intentionally opened.
-- Register first machine via UI: **New device** → IP → register.
-- Grant permissions before non-admin users expect terminal access.
+1. Set `BOOTSTRAP_ADMIN_USERNAME` / `BOOTSTRAP_ADMIN_PASSWORD` and `JWT_SECRET`
+   **before** the first start. The API prints a `WARNING` line for each one
+   still on the published demo value.
+2. Start the api service. The admin account is created on first boot; the log
+   line `bootstrap admin ready: user=…` confirms it.
+3. Sign in and change the password from **Settings → Change password** (this
+   asks for the current one). Non-admins have the same page for their own
+   account; admins can additionally reset anyone from **Users**.
+4. Confirm the AccessPolicy default remains private-mesh unless intentionally
+   opened.
+5. Register the first machine: **Machines → New device** → address → **Test
+   connection**.
+6. Grant permissions before non-admin users expect terminal access.
+
+**Lost the admin password.** Set a new `BOOTSTRAP_ADMIN_PASSWORD` and restart.
+The env value is applied to the account whenever it *changes*; leaving it
+unchanged does not overwrite a password set in the UI, so the recovery path
+does not quietly undo rotations. (Stores created before v1.0.0 have no record
+of the last applied value and take one extra re-apply on first upgrade.)
+
+**Locked out by the throttle.** Ten failed logins for one account within five
+minutes return `429` with `Retry-After`; the counter clears when the window
+passes or when a correct password is accepted. It is per account and in-memory,
+so restarting the api also clears it.
 
 ---
 
@@ -147,9 +180,9 @@ Optional: hook git push to rebuild/redeploy on your platform of choice. Override
 
 | Mode | When |
 |------|------|
-| Tailscale identity | Preferred for users on the mesh |
-| Username + password | Fallback / non-Tailscale paths |
-| Bootstrap admin | First install and recovery |
+| Username + password (local users, JWT) | The shipped path for everyone |
+| Bootstrap admin from env | First install and password recovery |
+| Tailscale identity | Not implemented — tracked as D-006 |
 
 ---
 

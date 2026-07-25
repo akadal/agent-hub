@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react'
-import { Navigate, Outlet, useLocation } from 'react-router-dom'
+import { Navigate, Outlet, useLocation } from 'react-router'
 import { LogOut, Menu, PanelLeftClose, PanelLeftOpen } from 'lucide-react'
 
 import { AppSidebar } from '@/components/layout/app-sidebar'

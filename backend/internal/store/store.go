@@ -22,6 +22,9 @@ var (
 	ErrUserExists   = errors.New("user already exists")
 	ErrLastAdmin    = errors.New("cannot delete or demote the last admin")
 	ErrInvalidRole  = errors.New("invalid role")
+	// ErrInvalidPassword is a rejected *new* password (empty, unchanged).
+	// A wrong *current* password is ErrInvalidCreds.
+	ErrInvalidPassword = errors.New("invalid new password")
 )
 
 // Valid local-account roles.
@@ -60,6 +63,11 @@ type Store struct {
 	grants   map[string]MachineGrant
 	audit    []AuditEvent
 	settings AccessSettings
+	// bootstrapSeed is a bcrypt hash of the BOOTSTRAP_ADMIN_PASSWORD value that
+	// was last written to the admin account. It exists so a restart can tell
+	// "the operator changed the env password" from "the admin changed their own
+	// password in the UI" — see EnsureBootstrapAdmin.
+	bootstrapSeed string
 }
 
 type snapshot struct {
@@ -69,6 +77,8 @@ type snapshot struct {
 	Grants    []MachineGrant  `json:"grants,omitempty"`
 	Audit     []AuditEvent    `json:"audit,omitempty"`
 	Settings  *AccessSettings `json:"settings,omitempty"`
+	// BootstrapSeed is a bcrypt hash, not a recoverable secret.
+	BootstrapSeed string `json:"bootstrap_seed,omitempty"`
 }
 
 func grantKey(userID, machineID string) string {
@@ -103,23 +113,35 @@ func Open(dataDir string) (*Store, error) {
 	return s, nil
 }
 
-// EnsureBootstrapAdmin creates the bootstrap admin if missing, or re-syncs the
-// password from env when the user already exists. Coolify/env credential
-// changes then take effect on every restart (self-hosted recovery path).
+// EnsureBootstrapAdmin creates the bootstrap admin if missing, and re-applies
+// the env password when the operator has *changed* it — the recovery path for a
+// self-hosted instance whose admin password was lost.
+//
+// It deliberately does not re-apply an unchanged env password. Doing that on
+// every restart (the original behaviour) silently reverted any password the
+// admin set in the UI, so rotating the published demo password only held until
+// the next `docker compose up`. The stored seed is what makes the two cases
+// distinguishable; a store written before the seed existed re-applies env once.
 func (s *Store) EnsureBootstrapAdmin(username, password string) error {
 	if username == "" || password == "" {
 		return fmt.Errorf("bootstrap admin username and password required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	id, exists := s.byName[username]
+	if exists && s.bootstrapSeed != "" &&
+		bcrypt.CompareHashAndPassword([]byte(s.bootstrapSeed), []byte(password)) == nil {
+		return nil // env unchanged since the last seed — leave the account alone
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
 		return err
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if id, ok := s.byName[username]; ok {
+	s.bootstrapSeed = string(hash)
+	if exists {
 		u := s.users[id]
 		u.PasswordHash = string(hash)
-		u.Role = "admin"
+		u.Role = RoleAdmin
 		s.users[id] = u
 		return s.saveLocked()
 	}
@@ -127,11 +149,39 @@ func (s *Store) EnsureBootstrapAdmin(username, password string) error {
 		ID:           uuid.NewString(),
 		Username:     username,
 		PasswordHash: string(hash),
-		Role:         "admin",
+		Role:         RoleAdmin,
 		CreatedAt:    time.Now().UTC(),
 	}
 	s.users[u.ID] = u
 	s.byName[u.Username] = u.ID
+	return s.saveLocked()
+}
+
+// ChangePassword rotates a user's own password after proving the current one.
+// Admins can already reset anyone through UpdateUser; this is the path a
+// regular user has, and the only one that requires the existing secret.
+func (s *Store) ChangePassword(id, current, next string) error {
+	if next == "" {
+		return fmt.Errorf("%w: new password is required", ErrInvalidPassword)
+	}
+	if next == current {
+		return fmt.Errorf("%w: new password must differ from the current one", ErrInvalidPassword)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	u, ok := s.users[id]
+	if !ok {
+		return ErrNotFound
+	}
+	if bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(current)) != nil {
+		return ErrInvalidCreds
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(next), bcrypt.DefaultCost)
+	if err != nil {
+		return err
+	}
+	u.PasswordHash = string(hash)
+	s.users[id] = u
 	return s.saveLocked()
 }
 
@@ -739,18 +789,20 @@ func (s *Store) load() error {
 	} else {
 		s.settings = DefaultAccessSettings()
 	}
+	s.bootstrapSeed = snap.BootstrapSeed
 	return nil
 }
 
 func (s *Store) saveLocked() error {
 	settings := s.settings
 	snap := snapshot{
-		Users:     make([]User, 0, len(s.users)),
-		Machines:  make([]Machine, 0, len(s.machines)),
-		Terminals: make([]Terminal, 0, len(s.terminals)),
-		Grants:    make([]MachineGrant, 0, len(s.grants)),
-		Audit:     append([]AuditEvent(nil), s.audit...),
-		Settings:  &settings,
+		Users:         make([]User, 0, len(s.users)),
+		Machines:      make([]Machine, 0, len(s.machines)),
+		Terminals:     make([]Terminal, 0, len(s.terminals)),
+		Grants:        make([]MachineGrant, 0, len(s.grants)),
+		Audit:         append([]AuditEvent(nil), s.audit...),
+		Settings:      &settings,
+		BootstrapSeed: s.bootstrapSeed,
 	}
 	for _, u := range s.users {
 		snap.Users = append(snap.Users, u)

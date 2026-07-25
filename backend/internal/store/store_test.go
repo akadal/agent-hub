@@ -1,6 +1,7 @@
 package store_test
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/akadal/agent-hub/backend/internal/store"
@@ -411,5 +412,93 @@ func TestPinnedHostKeySurvivesReload(t *testing.T) {
 	}
 	if got.HostKeyFingerprint != "SHA256:persisted" {
 		t.Fatalf("after reload fingerprint = %q, want SHA256:persisted", got.HostKeyFingerprint)
+	}
+}
+
+// The bootstrap admin is the account most likely to still be on the published
+// demo password, so "change it in the UI" has to hold across a restart.
+func TestSelfChangedAdminPasswordSurvivesRestart(t *testing.T) {
+	dir := t.TempDir()
+	st, err := store.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.EnsureBootstrapAdmin("admin", "from-env"); err != nil {
+		t.Fatal(err)
+	}
+	u, err := st.Authenticate("admin", "from-env")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.ChangePassword(u.ID, "from-env", "chosen-in-ui"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Same env value as before: a restart must not undo the operator's change.
+	restarted, err := store.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := restarted.EnsureBootstrapAdmin("admin", "from-env"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := restarted.Authenticate("admin", "chosen-in-ui"); err != nil {
+		t.Fatalf("password chosen in the UI did not survive restart: %v", err)
+	}
+	if _, err := restarted.Authenticate("admin", "from-env"); err == nil {
+		t.Fatal("the old env password still works after the admin changed it")
+	}
+}
+
+// The env password is also the documented recovery path: change it and restart.
+func TestChangedEnvPasswordIsReappliedOnRestart(t *testing.T) {
+	dir := t.TempDir()
+	st, err := store.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.EnsureBootstrapAdmin("admin", "from-env"); err != nil {
+		t.Fatal(err)
+	}
+	u, _ := st.Authenticate("admin", "from-env")
+	if err := st.ChangePassword(u.ID, "from-env", "forgotten"); err != nil {
+		t.Fatal(err)
+	}
+
+	restarted, err := store.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := restarted.EnsureBootstrapAdmin("admin", "operator-reset"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := restarted.Authenticate("admin", "operator-reset"); err != nil {
+		t.Fatalf("recovery via BOOTSTRAP_ADMIN_PASSWORD broke: %v", err)
+	}
+}
+
+func TestChangePasswordRequiresTheCurrentOne(t *testing.T) {
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, err := st.CreateUser("dev", "old-secret", "user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.ChangePassword(u.ID, "guessed", "new-secret"); !errors.Is(err, store.ErrInvalidCreds) {
+		t.Fatalf("wrong current password: err = %v, want ErrInvalidCreds", err)
+	}
+	if _, err := st.Authenticate("dev", "old-secret"); err != nil {
+		t.Fatal("a failed change must not touch the stored password")
+	}
+	if err := st.ChangePassword(u.ID, "old-secret", ""); !errors.Is(err, store.ErrInvalidPassword) {
+		t.Fatalf("empty new password: err = %v, want ErrInvalidPassword", err)
+	}
+	if err := st.ChangePassword(u.ID, "old-secret", "new-secret"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Authenticate("dev", "new-secret"); err != nil {
+		t.Fatalf("new password does not authenticate: %v", err)
 	}
 }

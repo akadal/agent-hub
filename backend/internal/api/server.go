@@ -17,6 +17,7 @@ import (
 	"github.com/akadal/agent-hub/backend/internal/sshterm"
 	"github.com/akadal/agent-hub/backend/internal/store"
 	"github.com/akadal/agent-hub/backend/internal/tailscale"
+	"github.com/akadal/agent-hub/backend/internal/version"
 	"github.com/gorilla/websocket"
 )
 
@@ -28,6 +29,9 @@ type Server struct {
 	// Optional Tailscale API import (empty key = feature off).
 	TailscaleAPIKey  string
 	TailscaleTailnet string
+
+	loginOnce     sync.Once
+	loginThrottle *loginThrottle
 }
 
 type ctxKey int
@@ -69,6 +73,9 @@ func (s *Server) NewMux() http.Handler {
 	mount("GET", "/hello", s.handleHello)
 	mount("POST", "/auth/login", s.handleLogin)
 	mount("GET", "/me", s.requireAuth(s.handleMe))
+	// Self-service rotation: without it a non-admin can never change the
+	// password an admin handed them.
+	mount("POST", "/me/password", s.requireAuth(s.handleChangeOwnPassword))
 
 	// Admin-only local user management (M4.1)
 	mount("GET", "/users", s.requireAuth(s.requireAdmin(s.handleListUsers)))
@@ -130,12 +137,19 @@ func NewMux() http.Handler {
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "service": "agent-hub"})
+	// The version travels with the health probe so an operator (or a bug
+	// report) can tell which build answered without shelling into the box.
+	writeJSON(w, http.StatusOK, map[string]string{
+		"status":  "ok",
+		"service": "agent-hub",
+		"version": version.String(),
+	})
 }
 
 func (s *Server) handleAPIRoot(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"service": "agent-hub-api",
+		"version": version.String(),
 		"ok":      true,
 		"hint":    "This is the API process, not the web UI. In Coolify attach your public domain ONLY to the web service (port 80). Leave the api service without a public domain — web proxies /api internally.",
 		"health":  "/health",
@@ -175,9 +189,21 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid json body")
 		return
 	}
+	// Guessing budget first: without it this endpoint is an unlimited password
+	// oracle for every account, and each miss also writes an audit row.
+	key := throttleKey(req.Username)
+	limiter := s.loginLimiter()
+	if wait, blocked := limiter.blocked(key); blocked {
+		secs := int(wait.Seconds()) + 1
+		w.Header().Set("Retry-After", strconv.Itoa(secs))
+		writeErr(w, http.StatusTooManyRequests,
+			"too many failed logins for this account — try again in "+strconv.Itoa(secs)+"s")
+		return
+	}
 	u, err := s.Store.Authenticate(req.Username, req.Password)
 	if err != nil {
 		if errors.Is(err, store.ErrInvalidCreds) {
+			limiter.fail(key)
 			_ = s.Store.AppendAudit(store.AuditEvent{
 				Username: req.Username,
 				Action:   "login.failed",
@@ -189,6 +215,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "auth failed")
 		return
 	}
+	limiter.succeed(key)
 	tok, exp, err := s.Tokens.Issue(u.ID, u.Username, u.Role)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "token issue failed")
@@ -213,6 +240,40 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	c := claimsFrom(r.Context())
 	writeJSON(w, http.StatusOK, userView{ID: c.UserID, Username: c.Username, Role: c.Role})
+}
+
+type changePasswordRequest struct {
+	CurrentPassword string `json:"current_password"`
+	NewPassword     string `json:"new_password"`
+}
+
+func (s *Server) handleChangeOwnPassword(w http.ResponseWriter, r *http.Request) {
+	c := claimsFrom(r.Context())
+	if c == nil {
+		writeErr(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	var req changePasswordRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	if err := s.Store.ChangePassword(c.UserID, req.CurrentPassword, req.NewPassword); err != nil {
+		switch {
+		case errors.Is(err, store.ErrInvalidCreds):
+			// Deliberately not 401: the session is valid, the typed secret is not.
+			writeErr(w, http.StatusForbidden, "current password is incorrect")
+		case errors.Is(err, store.ErrInvalidPassword):
+			writeErr(w, http.StatusBadRequest, err.Error())
+		case errors.Is(err, store.ErrNotFound):
+			writeErr(w, http.StatusNotFound, "user not found")
+		default:
+			writeErr(w, http.StatusInternalServerError, "change password failed")
+		}
+		return
+	}
+	s.audit(r, "user.password", "", "", c.Username+" changed their own password")
+	w.WriteHeader(http.StatusNoContent)
 }
 
 type createUserRequest struct {

@@ -1,4 +1,4 @@
-import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
+import { BrowserRouter, Navigate, Route, Routes } from 'react-router'
 
 import { AppShell } from '@/components/layout/app-shell'
 import { AuthProvider } from '@/lib/auth'

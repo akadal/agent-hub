@@ -114,6 +114,18 @@ Lightweight log of decisions that affect structure. Full product requirements st
 
 ---
 
+## ADR-010: An account's password belongs to the account, not to the environment
+
+| Field | Value |
+|-------|--------|
+| Status | accepted |
+| Date | 2026-07-25 |
+| Context | Local accounts had one write path: `PATCH /users/{id}`, admin-only. A regular user could therefore never replace the password an admin handed them, and the login route had no guessing budget at all — with a demo password published in `.env.example`, `admin` was an unlimited oracle. Worse, `EnsureBootstrapAdmin` re-applied `BOOTSTRAP_ADMIN_PASSWORD` on **every** start, so even an admin who did change their password had it silently reverted by the next `docker compose up`. "Change the demo password" was advice the product could not honour. |
+| Decision | Three parts of one rule. (1) **Self-service rotation**: `POST /me/password` changes the caller's own password and requires the current one; a wrong current password is `403`, not `401`, because the session is valid and only the typed secret is not. (2) **Seeded bootstrap**: the store records a bcrypt hash of the env password it last applied and re-applies env only when that value *changes*. Env stays the documented recovery path (`change the variable, restart`) without overwriting a rotation. (3) **A guessing budget**: ten failed logins per account per five minutes, then `429` + `Retry-After`, cleared by a correct password. It is keyed on the **username, not the client address** — behind a reverse proxy every request carries the proxy's IP, so address keying would lock out the whole instance, and honouring `X-Forwarded-For` instead would let the attacker choose their own key. |
+| Consequences | Passwords are rotatable by the person who owns them, and rotations survive restarts. The cost of username keying is that one account can be slowed by someone else's guessing — a nuisance next to unlimited attempts, and broad request-rate limiting stays an edge concern (see `SECURITY.md`). The throttle is in-memory, so a restart clears it; that is acceptable for a limiter whose job is to make guessing slow rather than to be an audit record. A store written before this ADR has no seed, so the first upgrade re-applies env once. |
+
+---
+
 ## How to add an ADR
 
 1. Increment `ADR-NNN`.

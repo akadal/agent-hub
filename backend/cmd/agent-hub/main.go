@@ -1,18 +1,24 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"log"
 	"net/http"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/akadal/agent-hub/backend/internal/api"
 	"github.com/akadal/agent-hub/backend/internal/auth"
 	"github.com/akadal/agent-hub/backend/internal/config"
 	"github.com/akadal/agent-hub/backend/internal/store"
+	"github.com/akadal/agent-hub/backend/internal/version"
 )
 
 func main() {
 	cfg := config.Load()
+	log.Printf("agent-hub %s", version.String())
 
 	st, err := store.Open(cfg.DataDir)
 	if err != nil {
@@ -52,8 +58,34 @@ func main() {
 		ReadHeaderTimeout: 15 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
-	if err := httpSrv.ListenAndServe(); err != nil {
+
+	// `docker stop` sends SIGTERM and then kills. Without this the process dies
+	// mid-request — including mid-write of store.json, which is the file holding
+	// every machine and credential.
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	errc := make(chan error, 1)
+	go func() {
+		if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			errc <- err
+		}
+	}()
+
+	select {
+	case err := <-errc:
 		log.Fatal(err)
+	case <-ctx.Done():
+		stop() // a second signal now kills immediately instead of waiting
+		log.Printf("shutting down…")
+		// Hijacked WebSockets are not tracked by Shutdown, so this waits only on
+		// plain HTTP requests; the grace period keeps it from hanging either way.
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := httpSrv.Shutdown(shutdownCtx); err != nil {
+			log.Printf("graceful shutdown failed, closing: %v", err)
+			_ = httpSrv.Close()
+		}
 	}
 }
 

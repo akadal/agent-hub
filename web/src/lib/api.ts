@@ -124,6 +124,33 @@ export async function fetchMe(token: string): Promise<User> {
   return (await res.json()) as User
 }
 
+export type ServerHealth = {
+  status: string
+  service: string
+  /** Release plus VCS revision, e.g. "1.0.0 (84020fd)". Older builds omit it. */
+  version?: string
+}
+
+/** Unauthenticated — the health probe is what tells you which build answered. */
+export async function fetchHealth(): Promise<ServerHealth> {
+  const res = await fetch(`${API_BASE}/health`)
+  if (!res.ok) throw new Error(await parseError(res))
+  return (await res.json()) as ServerHealth
+}
+
+/** Rotate your own password. Admin resets go through updateUser instead. */
+export async function changeOwnPassword(
+  token: string,
+  body: { current_password: string; new_password: string },
+): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/me/password`, {
+    method: 'POST',
+    headers: authHeaders(token),
+    body: JSON.stringify(body),
+  })
+  if (!res.ok && res.status !== 204) throw new Error(await parseError(res))
+}
+
 export async function listUsers(token: string): Promise<User[]> {
   const res = await fetch(`${API_BASE}/api/users`, {
     headers: authHeaders(token),

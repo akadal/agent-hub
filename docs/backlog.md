@@ -26,6 +26,7 @@ Ordered milestones for the Multi-Machine Terminal Dashboard. Items are product/e
 | M1.2 | JWT issue/refresh/logout | done |
 | M1.3 | Tailscale identity integration (preferred when available) | todo |
 | M1.4 | Bootstrap / recovery admin path for self-hosted ops | done |
+| M1.5 | Self-service password change + failed-login throttle (ADR-010) | done |
 
 ---
 
@@ -99,8 +100,13 @@ Ordered milestones for the Multi-Machine Terminal Dashboard. Items are product/e
 | M7.3 | Responsive / mobile browser smoke (login, machine list, terminal) | done |
 | M7.4 | Docs update (README run notes, debt watch list) | done |
 | M7.5 | CI on push/PR: Go vet+test+gofmt, web lint/test/build, Compose e2e | done |
+| M7.6 | Release hygiene: CHANGELOG, version in `/health` + UI, graceful shutdown | done |
+| M7.7 | Open-source community files: SECURITY, CONTRIBUTING, CoC, issue/PR templates | done |
 
 > **MVP note:** Compose e2e + scripts/e2e-smoke; mobile fullscreen terminal stabilized; remaining polish is optional.
+>
+> **v1.0.0 shipped 2026-07-25** — see `CHANGELOG.md`. Open items are M1.3
+> (Tailscale identity login) and the rows in `docs/debt.md`.
 
 ---
 

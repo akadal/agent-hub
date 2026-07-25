@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
-import { Link } from 'react-router-dom'
+import { Link } from 'react-router'
 import { LayoutPanelLeft, Plus, Trash2, Network } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
