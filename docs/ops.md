@@ -197,6 +197,114 @@ ClientAliveCountMax 240
 
 ---
 
+## 6b. Tailscale SSH targets — the hub is headless
+
+If a target runs **Tailscale SSH** (`tailscale set --ssh`, i.e. `RunSSH: true`),
+Tailscale intercepts port 22 **on the tailnet address** and answers it itself.
+The machine's own OpenSSH is bypassed for that address, so:
+
+- The SSH **password stored for the machine is never used**. Authentication is
+  the tailnet node identity of the hub, resolved against the tailnet ACL.
+- Whether the hub can connect is decided entirely by the `ssh` section of the
+  tailnet policy file.
+
+Check what a target is running:
+
+```bash
+ssh -v <user>@<tailnet-ip> exit 2>&1 | grep "remote software version"
+# "remote software version Tailscale"  -> Tailscale SSH (ACL-governed)
+# "remote software version OpenSSH_x"  -> ordinary sshd (password/key)
+```
+
+### Reproduce what the hub sees
+
+`sshdiag` opens a session through the exact same code path as the terminal
+bridge and prints the classified failure — run it **on the host running the
+API**, so you are testing from where the hub actually dials:
+
+```bash
+cd backend && go run ./cmd/sshdiag <address> <port> <user>
+```
+
+It takes no password argument (set `AGENT_HUB_SSH_PASSWORD` if the target needs
+one). If it prints `open OK` with no password set, the target is authenticating
+you by tailnet identity and the stored password is doing nothing.
+
+### `"action": "check"` cannot work for the hub
+
+Tailscale's **default** SSH policy is:
+
+```jsonc
+"ssh": [
+  { "action": "check", "src": ["autogroup:member"], "dst": ["autogroup:self"],
+    "users": ["autogroup:nonroot", "root"] },
+]
+```
+
+`check` parks each new session and requires a human to approve it in a browser.
+The approval is cached only for `checkPeriod` (default **12h**). Agent Hub is a
+headless server: it can never click that link. So a target under a `check` rule
+works right after a human approves it and then **breaks by itself hours later** —
+typically overnight. In the target's log this looks like:
+
+```
+tailscaled: ssh-conn-…: failed to fetch next SSH action:
+  fetch failed from https://unused/machine/ssh/wait/… : context deadline exceeded
+tailscaled: ssh-conn-…: failed to send auth banner: EOF
+```
+
+`/machine/ssh/wait/` is the check-mode hold. Confirm the source with:
+
+```bash
+# on the target
+sudo journalctl -u tailscaled --since "24 hours ago" \
+  | grep -E "handling conn|access granted|failed to fetch next SSH action"
+```
+
+### Fix: give the hub node an `accept` rule
+
+Edit the tailnet policy file (Tailscale admin console → **Access controls**) and
+add an `accept` rule for the hub **before** the default `check` rule. Rules are
+evaluated in order, so the hub stops needing approval while humans keep `check`:
+
+```jsonc
+{
+  "hosts": {
+    "agent-hub": "100.64.0.20",   // tailnet IP of the node running the API
+  },
+
+  "ssh": [
+    // Agent Hub is headless — it cannot complete a browser approval.
+    {
+      "action": "accept",
+      "src":    ["agent-hub"],
+      "dst":    ["autogroup:self"],
+      "users":  ["youruser"],       // the remote login(s) the hub uses
+    },
+
+    // Interactive humans keep check mode.
+    {
+      "action": "check",
+      "src":    ["autogroup:member"],
+      "dst":    ["autogroup:self"],
+      "users":  ["autogroup:nonroot", "root"],
+    },
+  ],
+}
+```
+
+Verify from the hub host after saving — no password should be needed:
+
+```bash
+ssh -o BatchMode=yes <user>@<tailnet-ip> 'echo ok'
+```
+
+> Do not "fix" this by putting the password back in. On a Tailscale SSH target
+> the password is inert; a login that starts working after a password change was
+> re-approved in a browser, not authenticated by the password.
+
+---
+
 ## 7. Incident checklist (draft)
 
 1. Can the site be reached from the expected network (Tailscale / VPN / LAN)?
@@ -204,6 +312,24 @@ ClientAliveCountMax 240
 3. Is the target machine still registered and reachable?
 4. Is tmux/session bridge healthy on that machine?
 5. Check audit log for recent access and errors (when M5 ships).
+
+**Read the terminal's error frame first.** A failed open reports a classified
+cause; each one has a different fix:
+
+| `kind` | Meaning | Fix |
+|--------|---------|-----|
+| `tailscale_check_pending` | Tailscale SSH is holding the session for browser approval | §6b — add an `accept` ACL rule for the hub node |
+| `tailscale_denied` | No ACL rule grants hub → target for that login | §6b — add/extend the `ssh` rule |
+| `tailnet_routing` | The API process cannot route to 100.x | Run the API with `network_mode: host` (§2) |
+| `auth_failed` | Ordinary sshd rejected the credentials | Fix the machine's SSH user/password |
+| `unreachable` | Nothing accepted TCP | Host down, wrong port, or firewall |
+| `timeout` | Connected, then the remote stopped responding | Loaded or suspended host |
+
+Causes marked non-retryable disable auto-reconnect on purpose — retrying a
+pending browser approval just piles up hung dials on the target.
+
+> **"It worked yesterday, it doesn't today"** on a Tailscale target is almost
+> always the `check` approval lapsing overnight. Go straight to §6b.
 
 ---
 

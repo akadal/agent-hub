@@ -8,9 +8,24 @@ import {
   type ReactNode,
 } from 'react'
 
-import { fetchMe, login as apiLogin, type User } from '@/lib/api'
+import {
+  fetchMe,
+  isAuthRejection,
+  login as apiLogin,
+  type User,
+} from '@/lib/api'
 
 const TOKEN_KEY = 'agent-hub-token'
+
+/**
+ * Session restore retries a transient API failure instead of logging the user
+ * out. Only a 401/403 means the token is actually dead; a redeploy, a proxy
+ * blip or a phone waking from sleep must not destroy a working session.
+ */
+const RESTORE_RETRY_DELAYS_MS = [1000, 2000, 4000, 8000]
+
+const sleep = (ms: number) =>
+  new Promise<void>((resolve) => setTimeout(resolve, ms))
 
 type AuthState = {
   token: string | null
@@ -37,17 +52,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setLoading(false)
         return
       }
-      try {
-        const me = await fetchMe(token)
-        if (!cancelled) setUser(me)
-      } catch {
-        if (!cancelled) {
-          localStorage.removeItem(TOKEN_KEY)
-          setToken(null)
-          setUser(null)
+      for (let attempt = 0; ; attempt++) {
+        try {
+          const me = await fetchMe(token)
+          if (!cancelled) {
+            setUser(me)
+            setLoading(false)
+          }
+          return
+        } catch (err) {
+          if (cancelled) return
+          if (isAuthRejection(err)) {
+            // The token really is dead — drop it and send the user to login.
+            localStorage.removeItem(TOKEN_KEY)
+            setToken(null)
+            setUser(null)
+            setLoading(false)
+            return
+          }
+          if (attempt >= RESTORE_RETRY_DELAYS_MS.length) {
+            // Still failing, but the token was never rejected. Keep it in
+            // storage so a reload recovers the session once the API is back.
+            setUser(null)
+            setLoading(false)
+            return
+          }
+          await sleep(RESTORE_RETRY_DELAYS_MS[attempt])
         }
-      } finally {
-        if (!cancelled) setLoading(false)
       }
     }
     void load()

@@ -71,6 +71,30 @@ async function parseError(res: Response): Promise<string> {
   }
 }
 
+/**
+ * An error carrying the HTTP status, so callers can tell "this token is
+ * rejected" (401/403) apart from "the API blinked" (502, restart, offline).
+ * Treating those the same is what silently logged people out mid-session.
+ */
+export class ApiError extends Error {
+  readonly status: number
+
+  constructor(status: number, message: string) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+  }
+}
+
+async function apiError(res: Response): Promise<ApiError> {
+  return new ApiError(res.status, await parseError(res))
+}
+
+/** True when the failure means the credentials are bad, not the network. */
+export function isAuthRejection(err: unknown): boolean {
+  return err instanceof ApiError && (err.status === 401 || err.status === 403)
+}
+
 export async function login(
   username: string,
   password: string,
@@ -88,7 +112,7 @@ export async function fetchMe(token: string): Promise<User> {
   const res = await fetch(`${API_BASE}/api/me`, {
     headers: authHeaders(token),
   })
-  if (!res.ok) throw new Error(await parseError(res))
+  if (!res.ok) throw await apiError(res)
   return (await res.json()) as User
 }
 

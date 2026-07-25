@@ -1031,6 +1031,11 @@ function SessionTerminal({
             type: string
             data?: string
             message?: string
+            /** Classified SSH open failure (see backend sshterm.Failure). */
+            kind?: string
+            hint?: string
+            approval_url?: string
+            retryable?: boolean
           }
           // Classic xterm only — stream feed parsing is disabled (coming soon).
           if (msg.type === 'stdout' && msg.data) {
@@ -1043,8 +1048,23 @@ function SessionTerminal({
             openFailed = true
             setStatus('error')
             term.writeln(`\x1b[31m${msg.message ?? 'ssh error'}\x1b[0m`)
+            // The server classifies why the open failed. Show the fix and any
+            // approval link instead of leaving a bare timeout on a black screen.
+            if (msg.kind) {
+              term.writeln(`\x1b[90m[cause: ${msg.kind}]\x1b[0m`)
+            }
+            if (msg.approval_url) {
+              term.writeln(
+                `\x1b[36m[approve this login: ${msg.approval_url}]\x1b[0m`,
+              )
+            }
+            if (msg.hint) {
+              term.writeln(`\x1b[33m${msg.hint}\x1b[0m`)
+            }
             term.writeln(
-              '\x1b[33m[stopped auto-reconnect — click the session again or New session to retry]\x1b[0m',
+              msg.retryable === false
+                ? '\x1b[33m[auto-reconnect off — retrying cannot fix this; apply the fix above, then New session]\x1b[0m'
+                : '\x1b[33m[stopped auto-reconnect — click the session again or New session to retry]\x1b[0m',
             )
           } else if (msg.type === 'status' && msg.message) {
             setStatus('opening ssh…')

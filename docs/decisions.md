@@ -78,6 +78,18 @@ Lightweight log of decisions that affect structure. Full product requirements st
 
 ---
 
+## ADR-007: Classify SSH open failures; never silently retry a human-gated one
+
+| Field | Value |
+|-------|--------|
+| Status | accepted |
+| Date | 2026-07-25 |
+| Context | A target running **Tailscale SSH** answers port 22 on its tailnet address itself, so the machine's stored SSH password is inert and access is decided by the tailnet ACL. Under Tailscale's default `"action": "check"` rule a session needs browser approval that is cached only for `checkPeriod` (12h). Agent Hub is headless, so such a target works right after a human approves it and then fails on its own hours later. The client surfaced this as an unexplained `i/o timeout` on a black terminal, and retried — piling hung dials on the target (137 stalled connections in 24h against one host) while giving the operator nothing to act on. The approval URL was in fact being sent by the remote, in the SSH auth banner, and thrown away. |
+| Decision | The SSH layer **records the authentication trace** (banner + keyboard-interactive instruction) and **classifies** every open failure into a `sshterm.Failure{Kind, Message, Hint, ApprovalURL, Retryable}` — `tailscale_check_pending`, `tailscale_denied`, `tailnet_routing`, `auth_failed`, `unreachable`, `timeout`. The bridge forwards this structurally on the WebSocket `error` frame; the terminal renders the cause, the fix and any approval link instead of a bare timeout. **`Retryable: false` disables auto-reconnect** — a pending browser approval, bad credentials or wrong network topology cannot be fixed by reconnecting. Diagnosis is inference over evidence, not a guess: what the remote said wins over the error string. |
+| Consequences | Failure causes are machine-readable, so the UI and the runbook can branch on `kind` (see `docs/ops.md` §6b and §7). Tailnet targets must be granted an `accept` ACL rule for the hub node — that is infrastructure configuration, not something the app can work around, and the app now says so explicitly. Adding a new failure mode means adding a `FailureKind` plus its hint, keeping cause and remedy in one place. |
+
+---
+
 ## How to add an ADR
 
 1. Increment `ADR-NNN`.

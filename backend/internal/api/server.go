@@ -725,6 +725,33 @@ type wsServerMsg struct {
 	Type    string `json:"type"`
 	Data    string `json:"data,omitempty"`
 	Message string `json:"message,omitempty"`
+
+	// Set on "error" frames when the SSH open path produced a classified cause.
+	// The client uses Kind/Retryable to decide whether reconnecting can help,
+	// and renders Hint/ApprovalURL instead of a blank terminal.
+	Kind        string `json:"kind,omitempty"`
+	Hint        string `json:"hint,omitempty"`
+	ApprovalURL string `json:"approval_url,omitempty"`
+	Retryable   *bool  `json:"retryable,omitempty"`
+}
+
+// sshOpenErrorMsg turns a failed SSH open into an "error" frame. When sshterm
+// classified the cause, the frame carries the machine-readable kind, the concrete
+// fix, and any approval URL the remote handed us — so the UI explains itself
+// instead of showing a black terminal, and stops retrying causes that only a
+// human can clear (browser approval, wrong credentials, wrong network topology).
+func sshOpenErrorMsg(err error) wsServerMsg {
+	msg := wsServerMsg{Type: "error", Message: "ssh open failed: " + err.Error()}
+	var oe *sshterm.OpenError
+	if errors.As(err, &oe) {
+		retryable := oe.Retryable
+		msg.Message = oe.Message
+		msg.Kind = string(oe.Kind)
+		msg.Hint = oe.Hint
+		msg.ApprovalURL = oe.ApprovalURL
+		msg.Retryable = &retryable
+	}
+	return msg
 }
 
 func (s *Server) handleTerminalWS(w http.ResponseWriter, r *http.Request) {
@@ -972,7 +999,7 @@ func (s *Server) bridgeSSH(w http.ResponseWriter, r *http.Request, m store.Machi
 	}, remoteSession, cols, rows)
 	if err != nil {
 		s.logf("bridgeSSH open failed %s after %s: %v", target, time.Since(openStart).Round(time.Millisecond), err)
-		_ = writeMsg(wsServerMsg{Type: "error", Message: "ssh open failed: " + err.Error()})
+		_ = writeMsg(sshOpenErrorMsg(err))
 		return
 	}
 	defer sess.Close()

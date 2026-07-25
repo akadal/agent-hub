@@ -48,7 +48,11 @@ func (t Target) addr() string {
 	return net.JoinHostPort(t.Address, fmt.Sprintf("%d", t.Port))
 }
 
-func clientConfig(t Target) *ssh.ClientConfig {
+// clientConfig builds the SSH client config. Everything the server says during
+// authentication is recorded into tr: Tailscale SSH puts its browser-approval
+// URL in the banner (and in the keyboard-interactive instruction), and that text
+// is the only thing that explains a check-mode stall.
+func clientConfig(t Target, tr *authTrace) *ssh.ClientConfig {
 	t = t.normalized()
 	pass := t.Password
 	return &ssh.ClientConfig{
@@ -58,14 +62,19 @@ func clientConfig(t Target) *ssh.ClientConfig {
 			// Tailscale SSH and some sshd configs prefer keyboard-interactive.
 			ssh.KeyboardInteractive(func(user, instruction string, questions []string, echos []bool) ([]string, error) {
 				_ = user
-				_ = instruction
 				_ = echos
+				tr.add(instruction)
 				answers := make([]string, len(questions))
-				for i := range questions {
+				for i, q := range questions {
+					tr.add(q)
 					answers[i] = pass
 				}
 				return answers, nil
 			}),
+		},
+		BannerCallback: func(message string) error {
+			tr.add(message)
+			return nil
 		},
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
 		Timeout:         dialTimeout,
@@ -81,13 +90,17 @@ func Dial(t Target) (*ssh.Client, error) {
 // dialRaw dials and authenticates. If openDeadline is non-zero, it is set on the
 // TCP connection for the handshake (and cleared before return on success).
 // The raw conn is returned so callers can keep a deadline during PTY/start.
+//
+// Failures come back as *OpenError so callers get a classified cause instead of
+// a bare "i/o timeout" they have to guess about.
 func dialRaw(t Target, openDeadline time.Time) (*ssh.Client, net.Conn, error) {
 	t = t.normalized()
 	addr := t.addr()
+	tr := &authTrace{}
 
 	raw, err := net.DialTimeout("tcp", addr, dialTimeout)
 	if err != nil {
-		return nil, nil, fmt.Errorf("%w%s", err, tailscaleHint(t.Address))
+		return nil, nil, &OpenError{Failure: Diagnose(StageDial, err, tr, t), Err: err}
 	}
 	if tcp, ok := raw.(*net.TCPConn); ok {
 		_ = tcp.SetKeepAlive(true)
@@ -97,31 +110,12 @@ func dialRaw(t Target, openDeadline time.Time) (*ssh.Client, net.Conn, error) {
 		_ = raw.SetDeadline(openDeadline)
 	}
 
-	cc, chans, reqs, err := ssh.NewClientConn(raw, addr, clientConfig(t))
+	cc, chans, reqs, err := ssh.NewClientConn(raw, addr, clientConfig(t, tr))
 	if err != nil {
 		_ = raw.Close()
-		return nil, nil, fmt.Errorf("%w%s", err, tailscaleHint(t.Address))
+		return nil, nil, &OpenError{Failure: Diagnose(StageHandshake, err, tr, t), Err: err}
 	}
 	return ssh.NewClient(cc, chans, reqs), raw, nil
-}
-
-// tailscaleHint appends actionable text when dialing CGNAT / Tailscale ranges
-// from a network that cannot complete the handshake (common: Docker bridge
-// 10.x/172.x → 100.x even when the *host* has Tailscale).
-func tailscaleHint(address string) string {
-	ip := net.ParseIP(address)
-	if ip == nil {
-		return ""
-	}
-	// Tailscale / CGNAT: 100.64.0.0/10
-	if ip4 := ip.To4(); ip4 != nil {
-		if ip4[0] == 100 && ip4[1] >= 64 && ip4[1] <= 127 {
-			return " (Tailscale 100.x: API container is on Docker bridge, not the host tailnet. " +
-				"Coolify/VPS: deploy with docker-compose.coolify.yml or set api network_mode=host. " +
-				"Mac Docker Desktop: scripts/run-api-host.sh + docker-compose.host-api.yml)"
-		}
-	}
-	return ""
 }
 
 // ExecResult is the outcome of a one-shot remote command.
