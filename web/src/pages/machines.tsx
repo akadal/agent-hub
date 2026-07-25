@@ -16,6 +16,7 @@ import {
   type TailscaleStatus,
 } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
+import { cn } from '@/lib/utils'
 
 /** A check is either in flight (with its start time) or a finished verdict. */
 type CheckState = MachineCheck | { running: true; startedAt: number }
@@ -82,6 +83,14 @@ export function MachinesPage() {
   const [tsOnlineOnly, setTsOnlineOnly] = useState(true)
   const [tsBusy, setTsBusy] = useState(false)
   const [tsMsg, setTsMsg] = useState<string | null>(null)
+  /** Addresses the operator ticked. Nothing is imported without a tick. */
+  const [tsPicked, setTsPicked] = useState<string[]>([])
+  /**
+   * Credentials are opt-in here. A tailnet host on port 22 is answered by
+   * Tailscale SSH, which authenticates by ACL and ignores whatever we store —
+   * so asking for a password up front taught operators the wrong thing.
+   */
+  const [tsCreds, setTsCreds] = useState(false)
 
   useEffect(() => {
     const running = Object.values(checks).some(isRunning)
@@ -114,7 +123,15 @@ export function MachinesPage() {
     setTsLoading(true)
     setError(null)
     try {
-      setTsStatus(await getTailscaleStatus(token))
+      const status = await getTailscaleStatus(token)
+      setTsStatus(status)
+      // Pre-tick what a plain import would have taken anyway, so the common
+      // case is still one click — it is just visible and editable now.
+      setTsPicked(
+        (status.devices ?? [])
+          .filter((d) => !d.already_added && d.online)
+          .map((d) => d.preferred_address),
+      )
     } catch (e) {
       setTsStatus(null)
       setError(e instanceof Error ? e.message : String(e))
@@ -131,17 +148,17 @@ export function MachinesPage() {
     try {
       const res = await importFromTailscale(token, {
         ssh_user: tsUser,
-        ssh_password: tsPassword,
+        ssh_password: tsCreds ? tsPassword : '',
         port: tsPort,
-        online_only: tsOnlineOnly,
-        ssh_private_key: tsKey.trim() || undefined,
-        ssh_key_passphrase: tsKeyPassphrase || undefined,
+        addresses: tsPicked,
+        ssh_private_key: (tsCreds && tsKey.trim()) || undefined,
+        ssh_key_passphrase: (tsCreds && tsKeyPassphrase) || undefined,
       })
       setTsMsg(res.message)
       setTsKey('')
       setTsKeyPassphrase('')
       // Refresh device list + machines
-      setTsStatus(await getTailscaleStatus(token))
+      await openTailscale()
       await refresh()
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -229,8 +246,16 @@ export function MachinesPage() {
   }
 
   const tsDevices = tsStatus?.devices ?? []
-  const newOnline = tsDevices.filter((d) => d.online && !d.already_added).length
-  const newAll = tsDevices.filter((d) => !d.already_added).length
+  const tsVisible = tsOnlineOnly
+    ? tsDevices.filter((d) => d.online || d.already_added)
+    : tsDevices
+  const tsImportable = tsVisible.filter((d) => !d.already_added)
+  const togglePicked = (address: string) =>
+    setTsPicked((prev) =>
+      prev.includes(address)
+        ? prev.filter((a) => a !== address)
+        : [...prev, address],
+    )
 
   return (
     <div className="mx-auto flex max-w-4xl flex-col gap-6">
@@ -291,36 +316,85 @@ TAILSCALE_TAILNET=-`}
           ) : (
             <div className="space-y-4">
               <p className="text-sm text-muted-foreground">
-                Found {tsDevices.length} authorized device(s). New to add:{' '}
-                {tsOnlineOnly ? newOnline : newAll}
-                {tsOnlineOnly ? ' (online only)' : ''}. Already registered
-                addresses are skipped. Same SSH user/password applies to all
-                imports — edit credentials later by re-registering if needed.
+                Found {tsDevices.length} authorized device(s). Tick the hosts to
+                register — nothing is added without a tick. Addresses you
+                already registered are shown but cannot be picked again.
               </p>
 
-              {tsDevices.length > 0 ? (
-                <ul className="max-h-48 overflow-auto rounded-md border border-border text-sm">
-                  {tsDevices.map((d) => (
-                    <li
-                      key={d.preferred_address}
-                      className="flex items-center justify-between gap-2 border-b border-border px-3 py-2 last:border-0"
-                    >
-                      <div className="min-w-0">
-                        <div className="truncate font-medium">{d.name}</div>
-                        <div className="font-mono text-xs text-muted-foreground">
-                          {d.preferred_address}
-                          {d.os ? ` · ${d.os}` : ''}
-                        </div>
-                      </div>
-                      <span className="shrink-0 text-xs text-muted-foreground">
-                        {d.already_added
-                          ? 'added'
-                          : d.online
-                            ? 'online'
-                            : 'offline'}
-                      </span>
-                    </li>
-                  ))}
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={tsImportable.length === 0}
+                  onClick={() =>
+                    setTsPicked(tsImportable.map((d) => d.preferred_address))
+                  }
+                >
+                  Select all
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  disabled={tsPicked.length === 0}
+                  onClick={() => setTsPicked([])}
+                >
+                  Clear
+                </Button>
+                <label className="ml-auto flex items-center gap-2 text-xs text-muted-foreground">
+                  <input
+                    type="checkbox"
+                    checked={!tsOnlineOnly}
+                    onChange={(e) => setTsOnlineOnly(!e.target.checked)}
+                    className="size-4 rounded border-input"
+                  />
+                  Show devices not seen recently
+                </label>
+              </div>
+
+              {tsVisible.length > 0 ? (
+                <ul className="max-h-64 overflow-auto rounded-md border border-border text-sm">
+                  {tsVisible.map((d) => {
+                    const picked = tsPicked.includes(d.preferred_address)
+                    return (
+                      <li
+                        key={d.preferred_address}
+                        className="border-b border-border last:border-0"
+                      >
+                        <label
+                          className={cn(
+                            'flex cursor-pointer items-center gap-3 px-3 py-2.5',
+                            d.already_added && 'cursor-default opacity-60',
+                          )}
+                        >
+                          <input
+                            type="checkbox"
+                            className="size-4 shrink-0 rounded border-input"
+                            checked={picked}
+                            disabled={d.already_added}
+                            onChange={() => togglePicked(d.preferred_address)}
+                          />
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate font-medium">
+                              {d.name}
+                            </span>
+                            <span className="block font-mono text-xs text-muted-foreground">
+                              {d.preferred_address}
+                              {d.os ? ` · ${d.os}` : ''}
+                            </span>
+                          </span>
+                          <span className="shrink-0 text-xs text-muted-foreground">
+                            {d.already_added
+                              ? 'added'
+                              : d.online
+                                ? 'online'
+                                : 'offline'}
+                          </span>
+                        </label>
+                      </li>
+                    )
+                  })}
                 </ul>
               ) : (
                 <p className="text-sm text-muted-foreground">
@@ -328,15 +402,8 @@ TAILSCALE_TAILNET=-`}
                 </p>
               )}
 
-              <div className="grid gap-3 sm:grid-cols-3">
+              <div className="grid gap-3 sm:grid-cols-2">
                 <Field label="SSH user" value={tsUser} onChange={setTsUser} />
-                <Field
-                  label="SSH password"
-                  value={tsPassword}
-                  onChange={setTsPassword}
-                  type="password"
-                  required={false}
-                />
                 <Field
                   label="SSH port"
                   value={String(tsPort)}
@@ -344,36 +411,56 @@ TAILSCALE_TAILNET=-`}
                 />
               </div>
 
-              <PrivateKeyField
-                id="ts-private-key"
-                label="SSH private key (optional — applied to every imported device)"
-                value={tsKey}
-                onChange={setTsKey}
-                passphrase={tsKeyPassphrase}
-                onPassphraseChange={setTsKeyPassphrase}
-                help="Tailnet fleets are usually keyed alike. Without a key, importing hosts that set PasswordAuthentication no registers machines you cannot open."
-              />
+              <div className="rounded-md border border-dashed border-border bg-muted/30 p-3">
+                <label className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={tsCreds}
+                    onChange={(e) => setTsCreds(e.target.checked)}
+                    className="size-4 rounded border-input"
+                  />
+                  Store an SSH credential for these hosts
+                </label>
+                <p className="mt-2 text-xs text-muted-foreground">
+                  Leave this off for ordinary tailnet hosts: port 22 on a 100.x
+                  address is answered by <strong>Tailscale SSH</strong>, which
+                  authorises by tailnet ACL and ignores anything stored here.
+                  Turn it on when you import hosts reached on another port, or
+                  by an address outside the tailnet.
+                </p>
 
-              <label className="flex items-center gap-2 text-sm">
-                <input
-                  type="checkbox"
-                  checked={tsOnlineOnly}
-                  onChange={(e) => setTsOnlineOnly(e.target.checked)}
-                  className="size-4 rounded border-input"
-                />
-                Only import devices seen online recently
-              </label>
+                {tsCreds ? (
+                  <div className="mt-3 space-y-3">
+                    <Field
+                      label="SSH password"
+                      value={tsPassword}
+                      onChange={setTsPassword}
+                      type="password"
+                      required={false}
+                    />
+                    <PrivateKeyField
+                      id="ts-private-key"
+                      label="SSH private key (applied to every device you tick)"
+                      value={tsKey}
+                      onChange={setTsKey}
+                      passphrase={tsKeyPassphrase}
+                      onPassphraseChange={setTsKeyPassphrase}
+                      help="Tailnet fleets are usually keyed alike. A hardened host with PasswordAuthentication no needs the key — a password imports a machine you cannot open."
+                    />
+                  </div>
+                ) : null}
+              </div>
 
               <div className="flex flex-wrap items-center gap-2">
                 <Button
                   type="button"
-                  disabled={tsBusy || (tsOnlineOnly ? newOnline : newAll) === 0}
+                  disabled={tsBusy || tsPicked.length === 0}
                   onClick={() => void onImportTailscale()}
                 >
                   <Network className="size-4" />
                   {tsBusy
                     ? 'Importing…'
-                    : `Add ${tsOnlineOnly ? newOnline : newAll} machine(s)`}
+                    : `Add ${tsPicked.length} machine(s)`}
                 </Button>
                 <Button
                   type="button"

@@ -29,6 +29,8 @@ type Server struct {
 	// Optional Tailscale API import (empty key = feature off).
 	TailscaleAPIKey  string
 	TailscaleTailnet string
+	// TailscaleBaseURL overrides api.tailscale.com. Only tests set it.
+	TailscaleBaseURL string
 
 	loginOnce     sync.Once
 	loginThrottle *loginThrottle
@@ -421,6 +423,7 @@ func (s *Server) tailscaleClient() *tailscale.Client {
 	return &tailscale.Client{
 		APIKey:  s.TailscaleAPIKey,
 		Tailnet: s.TailscaleTailnet,
+		BaseURL: s.TailscaleBaseURL,
 	}
 }
 
@@ -479,6 +482,10 @@ type tailscaleImportRequest struct {
 	Port             int    `json:"port"`
 	// OnlineOnly skips devices not seen recently (default true).
 	OnlineOnly *bool `json:"online_only"`
+	// Addresses limits the import to the devices the operator ticked, by
+	// preferred address. Empty means "every device that passes the filters" —
+	// the original behaviour, kept so existing scripts still work.
+	Addresses []string `json:"addresses"`
 }
 
 func (s *Server) handleTailscaleImport(w http.ResponseWriter, r *http.Request) {
@@ -516,10 +523,26 @@ func (s *Server) handleTailscaleImport(w http.ResponseWriter, r *http.Request) {
 		known[m.Address] = true
 	}
 
+	// An explicit pick wins over the filters: someone who ticked an offline
+	// host meant it, and silently dropping it looks like the import is broken.
+	var wanted map[string]bool
+	if len(req.Addresses) > 0 {
+		wanted = make(map[string]bool, len(req.Addresses))
+		for _, a := range req.Addresses {
+			if a = strings.TrimSpace(a); a != "" {
+				wanted[a] = true
+			}
+		}
+	}
+
 	added := make([]store.MachinePublic, 0)
 	skipped := 0
 	for _, d := range devices {
-		if onlineOnly && !d.Online {
+		if wanted != nil && !wanted[d.PreferredAddress] {
+			skipped++
+			continue
+		}
+		if wanted == nil && onlineOnly && !d.Online {
 			skipped++
 			continue
 		}

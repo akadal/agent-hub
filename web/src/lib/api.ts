@@ -349,6 +349,9 @@ export async function importFromTailscale(
     ssh_password: string
     port: number
     online_only?: boolean
+    /** Preferred addresses the operator ticked. Omit to import everything
+     *  that passes the filters (the pre-selection behaviour). */
+    addresses?: string[]
     /** Shared PEM key applied to every imported device. Required for a fleet
      *  with `PasswordAuthentication no`, where a password imports nothing usable. */
     ssh_private_key?: string
