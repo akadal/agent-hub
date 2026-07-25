@@ -68,6 +68,52 @@ export function setTerminalViewMode(
   storage.setItem(TERMINAL_VIEW_PREF_KEY, mode)
 }
 
+export const TERMINAL_FONT_SIZE_KEY = 'agent-hub.terminalFontSize'
+
+/**
+ * Readable bounds for the PTY font. Below 9px a phone renders mush; above 24px
+ * an 80-column line no longer fits on any handset, which breaks more than it
+ * helps. `0` (unset) means "pick from the device" — see `defaultFontSize`.
+ */
+export const TERMINAL_FONT_MIN = 9
+export const TERMINAL_FONT_MAX = 24
+
+/** Phones start smaller so a default 80-column shell fits without wrapping. */
+export function defaultFontSize(narrow: boolean): number {
+  return narrow ? 12 : 14
+}
+
+export function clampFontSize(size: number): number {
+  if (!Number.isFinite(size)) return TERMINAL_FONT_MIN
+  return Math.min(TERMINAL_FONT_MAX, Math.max(TERMINAL_FONT_MIN, Math.round(size)))
+}
+
+/** Stored font size, or the device default when unset/invalid. */
+export function getTerminalFontSize(
+  narrow: boolean,
+  storage: StorageLike = defaultStorage(),
+): number {
+  try {
+    const raw = storage.getItem(TERMINAL_FONT_SIZE_KEY)
+    if (raw !== null && raw.trim() !== '') {
+      const n = Number(raw)
+      if (Number.isFinite(n) && n > 0) return clampFontSize(n)
+    }
+  } catch {
+    /* ignore */
+  }
+  return defaultFontSize(narrow)
+}
+
+export function setTerminalFontSize(
+  size: number,
+  storage: StorageLike = defaultStorage(),
+): number {
+  const clamped = clampFontSize(size)
+  storage.setItem(TERMINAL_FONT_SIZE_KEY, String(clamped))
+  return clamped
+}
+
 /** Toggle classic ↔ chat and return the new mode. */
 export function toggleTerminalViewMode(
   storage: StorageLike = defaultStorage(),

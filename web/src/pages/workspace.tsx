@@ -7,6 +7,7 @@ import {
   Maximize2,
   Minimize2,
   Monitor,
+  PanelLeft,
   Plus,
   Terminal as TerminalIcon,
   Trash2,
@@ -14,9 +15,15 @@ import {
 } from 'lucide-react'
 import '@xterm/xterm/css/xterm.css'
 
+import {
+  TerminalChatView,
+  type ChatFeedItem,
+} from '@/components/terminal-chat-view'
+import { TerminalKeyBar } from '@/components/terminal-keybar'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Separator } from '@/components/ui/separator'
+import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet'
 import {
   closeTerminal,
   createTerminal,
@@ -28,7 +35,22 @@ import {
 } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import {
+  createStreamFeed,
+  feedAddUser,
+  feedPush,
+  feedSnapshot,
+  type StreamFeed,
+} from '@/lib/stream-blocks'
+import { controlSequence } from '@/lib/terminal-keys'
+import { useTheme } from '@/lib/theme'
+import type { ResolvedTheme } from '@/lib/theme-pref'
+import { terminalSurface, xtermTheme } from '@/lib/terminal-theme'
+import {
+  TERMINAL_FONT_MAX,
+  TERMINAL_FONT_MIN,
+  getTerminalFontSize,
   getTerminalViewMode,
+  setTerminalFontSize,
   setTerminalViewMode,
   type TerminalViewMode,
 } from '@/lib/terminal-view-pref'
@@ -42,12 +64,17 @@ import { cn } from '@/lib/utils'
  * Fullscreen is layout-only (fixed overlay) — never remounts xterm/WS.
  * On mobile, the overlay is pinned to visualViewport so soft keyboard /
  * URL-bar changes do not thrash fit() and reflow the PTY.
+ *
+ * Phone layout: the machine/session picker is a sheet, not a pane. It used to
+ * take a third of the screen above the shell, which left a terminal barely
+ * ten lines tall on a handset.
  */
 export function WorkspacePage() {
   const { machineId: routeMachineId } = useParams<{ machineId?: string }>()
   const [search, setSearch] = useSearchParams()
   const navigate = useNavigate()
   const { token } = useAuth()
+  const { resolved: appTheme } = useTheme()
 
   const [machines, setMachines] = useState<Machine[]>([])
   const [sessions, setSessions] = useState<TerminalSession[]>([])
@@ -65,29 +92,33 @@ export function WorkspacePage() {
    */
   const [mountedSessionIds, setMountedSessionIds] = useState<string[]>([])
   /**
-   * Global display mode (classic xterm vs stream placeholder). Shared by all
+   * Global display mode (classic xterm vs readable stream). Shared by all
    * sessions; persisted in localStorage — not per-session.
-   * Stream feed is temporarily disabled (Coming soon) — no PTY text parsing.
-   * Prefer classic so a saved "chat" pref does not hide the TTY on load.
    */
-  const [viewMode, setViewMode] = useState<TerminalViewMode>(() => {
-    const stored = getTerminalViewMode()
-    if (stored === 'chat') {
-      setTerminalViewMode('classic')
-      return 'classic'
-    }
-    return stored
-  })
+  const [viewMode, setViewMode] = useState<TerminalViewMode>(getTerminalViewMode)
+  /** Phone: machines/sessions live in a sheet so the shell keeps the viewport. */
+  const [pickerOpen, setPickerOpen] = useState(false)
   /**
-   * Mobile: collapse machines/sessions picker so the terminal/stream
-   * gets the full viewport (biggest smoothness + UX win on phone).
+   * Soft keys (Esc/Tab/Ctrl/arrows). On by default for touch input, where the
+   * OS keyboard simply has no way to send them.
    */
-  const [pickerCollapsed, setPickerCollapsed] = useState(false)
+  const [softKeys, setSoftKeys] = useState(prefersCoarsePointer)
+  const [fontSize, setFontSizeState] = useState(() =>
+    getTerminalFontSize(isNarrowViewport()),
+  )
 
   const shellRef = useRef<HTMLDivElement>(null)
   const scheduleLayoutFit = useCallback(() => {
     setLayoutEpoch((n) => n + 1)
   }, [])
+
+  const changeFontSize = useCallback(
+    (delta: number) => {
+      setFontSizeState((prev) => setTerminalFontSize(prev + delta))
+      scheduleLayoutFit()
+    },
+    [scheduleLayoutFit],
+  )
 
   const toggleViewMode = useCallback(() => {
     setViewMode((prev) => {
@@ -269,8 +300,6 @@ export function WorkspacePage() {
     setMountedSessionIds((prev) =>
       prev.includes(selectedSessionId) ? prev : [...prev, selectedSessionId],
     )
-    // Mobile: focus the shell — machines list was eating half the viewport.
-    if (isNarrowViewport()) setPickerCollapsed(true)
   }, [selectedSessionId])
 
   const mountSession = useCallback((id: string) => {
@@ -304,7 +333,7 @@ export function WorkspacePage() {
       await refreshSessions()
       mountSession(t.id)
       setSearch({ session: t.id })
-      if (isNarrowViewport()) setPickerCollapsed(true)
+      setPickerOpen(false)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -337,15 +366,37 @@ export function WorkspacePage() {
     navigate(`/workspace/${id}`)
   }
 
-  function selectSession(id: string) {
-    mountSession(id)
-    setSearch({ session: id })
-    // Phone: jump straight into the shell, hide the long machine list.
-    if (isNarrowViewport()) setPickerCollapsed(true)
-  }
+  const selectSession = useCallback(
+    (id: string) => {
+      mountSession(id)
+      setSearch({ session: id })
+      setPickerOpen(false)
+    },
+    [mountSession, setSearch],
+  )
 
   const activeStatus =
     (selectedSessionId && statusById[selectedSessionId]) || 'idle'
+
+  const picker = (
+    <WorkspacePicker
+      machines={machines}
+      sessions={sessions}
+      selectedMachineId={selectedMachineId}
+      selectedSessionId={selectedSessionId}
+      selectedMachine={selectedMachine}
+      mountedSessionIds={mountedSessionIds}
+      busy={busy}
+      fontSize={fontSize}
+      softKeys={softKeys}
+      onSelectMachine={selectMachine}
+      onSelectSession={selectSession}
+      onNewSession={() => void onNewSession()}
+      onCloseSession={(id) => void onCloseSession(id)}
+      onFontSize={changeFontSize}
+      onToggleSoftKeys={() => setSoftKeys((v) => !v)}
+    />
+  )
 
   return (
     <div
@@ -354,7 +405,7 @@ export function WorkspacePage() {
         'flex w-full flex-col gap-0 overflow-hidden bg-card md:flex-row',
         fullscreen
           ? // Cover app shell; visualViewport pin applied via ref styles on mobile.
-            'fixed z-50 min-h-0 rounded-none border-0 bg-background pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]'
+            'fixed z-50 min-h-0 rounded-none border-0 bg-background pt-[env(safe-area-inset-top)]'
           : 'h-full min-h-[280px] flex-1 rounded-none border-0 shadow-none md:min-h-[420px] md:rounded-xl md:border md:border-border md:shadow-sm',
       )}
       // Non-JS fallback geometry when not yet pinned by the fullscreen effect.
@@ -364,135 +415,47 @@ export function WorkspacePage() {
           : undefined
       }
     >
-      {/* Machines / sessions sidebar — hidden in immersive mode / mobile focus */}
+      {/* Desktop: permanent picker column. Immersive mode hides it. */}
       <aside
         className={cn(
-          'flex max-h-[36vh] w-full shrink-0 flex-col border-b border-border md:max-h-none md:w-72 md:border-b-0 md:border-r',
-          (fullscreen || pickerCollapsed) && 'hidden',
+          'hidden w-72 shrink-0 flex-col border-r border-border md:flex',
+          fullscreen && 'md:hidden',
         )}
       >
-        <div className="flex items-center justify-between gap-2 px-3 py-3">
-          <div className="flex items-center gap-2 text-sm font-semibold">
-            <Monitor className="size-4" />
-            Workspace
-          </div>
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={!selectedMachineId || busy}
-            onClick={() => void onNewSession()}
-            title="New terminal session"
-          >
-            <Plus className="size-4" />
-            New
-          </Button>
-        </div>
-        <Separator />
-
-        <div className="px-3 py-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-          Machines
-        </div>
-        <ScrollArea className="max-h-28 px-2 md:max-h-40">
-          {machines.length === 0 ? (
-            <p className="px-2 py-2 text-xs text-muted-foreground">
-              No machines. Register one under Machines.
-            </p>
-          ) : (
-            <ul className="flex flex-col gap-0.5 pb-2">
-              {machines.map((m) => (
-                <li key={m.id}>
-                  <button
-                    type="button"
-                    onClick={() => selectMachine(m.id)}
-                    className={cn(
-                      'flex w-full flex-col rounded-md px-2 py-1.5 text-left text-sm transition-colors',
-                      m.id === selectedMachineId
-                        ? 'bg-sidebar-accent text-sidebar-accent-foreground'
-                        : 'hover:bg-muted/60',
-                    )}
-                  >
-                    <span className="font-medium leading-tight">{m.name}</span>
-                    <span className="font-mono text-[10px] text-muted-foreground">
-                      {m.ssh_user}@{m.address}:{m.port}
-                    </span>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </ScrollArea>
-
-        <Separator />
-        <div className="px-3 py-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-          Sessions
-          {selectedMachine ? (
-            <span className="normal-case tracking-normal text-muted-foreground/80">
-              {' '}
-              · {selectedMachine.name}
-            </span>
-          ) : null}
-        </div>
-        <ScrollArea className="min-h-0 flex-1 px-2">
-          {sessions.length === 0 ? (
-            <p className="px-2 py-3 text-xs text-muted-foreground">
-              No sessions yet. Create one per task; switching tabs keeps each
-              shell alive.
-            </p>
-          ) : (
-            <ul className="flex flex-col gap-0.5 pb-3">
-              {sessions.map((s) => {
-                const live = mountedSessionIds.includes(s.id)
-                return (
-                  <li key={s.id} className="group flex items-stretch gap-0.5">
-                    <button
-                      type="button"
-                      onClick={() => selectSession(s.id)}
-                      className={cn(
-                        'flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-2 text-left text-sm transition-colors',
-                        s.id === selectedSessionId
-                          ? 'bg-primary text-primary-foreground'
-                          : 'hover:bg-muted/60',
-                      )}
-                    >
-                      <TerminalIcon className="size-3.5 shrink-0 opacity-80" />
-                      <span className="truncate font-medium">{s.name}</span>
-                      {live ? (
-                        <span
-                          className={cn(
-                            'ml-auto size-1.5 shrink-0 rounded-full',
-                            s.id === selectedSessionId
-                              ? 'bg-primary-foreground/80'
-                              : 'bg-emerald-500',
-                          )}
-                          title="Live shell attached"
-                        />
-                      ) : null}
-                    </button>
-                    <button
-                      type="button"
-                      className="rounded-md px-1.5 text-muted-foreground opacity-0 transition-opacity hover:bg-destructive/10 hover:text-destructive group-hover:opacity-100 max-md:opacity-100"
-                      title="Close session"
-                      onClick={() => void onCloseSession(s.id)}
-                    >
-                      <X className="size-3.5" />
-                    </button>
-                  </li>
-                )
-              })}
-            </ul>
-          )}
-        </ScrollArea>
+        {picker}
       </aside>
+
+      {/* Phone: same picker, as an overlay — the shell keeps the whole screen. */}
+      <Sheet open={pickerOpen} onOpenChange={setPickerOpen}>
+        <SheetContent side="left" className="w-[19rem] bg-card p-0 md:hidden">
+          <SheetTitle className="sr-only">Machines and sessions</SheetTitle>
+          {/* Keep the header clear of the sheet's own close button. */}
+          <div className="flex h-full min-h-0 flex-col [&_[data-picker-head]]:pr-10">
+            {picker}
+          </div>
+        </SheetContent>
+      </Sheet>
 
       <section className="flex min-h-0 min-w-0 flex-1 flex-col">
         <header
           className={cn(
-            'flex shrink-0 items-center justify-between gap-2 border-b border-border',
+            'flex shrink-0 items-center gap-1.5 border-b border-border sm:gap-2',
             fullscreen
               ? 'bg-card/95 px-2 py-1.5 backdrop-blur supports-[backdrop-filter]:bg-card/80'
-              : 'flex-wrap px-3 py-2 md:px-4',
+              : 'px-2 py-1.5 md:px-4 md:py-2',
           )}
         >
+          <Button
+            size="icon"
+            variant="ghost"
+            onClick={() => setPickerOpen(true)}
+            className="size-9 shrink-0 touch-manipulation md:hidden"
+            title="Machines & sessions"
+            aria-label="Machines and sessions"
+          >
+            <PanelLeft className="size-4" />
+          </Button>
+
           <div className="min-w-0 flex-1">
             <div className="truncate text-sm font-semibold">
               {selectedSession?.name ?? 'No session selected'}
@@ -509,42 +472,33 @@ export function WorkspacePage() {
               ) : null}
             </div>
           </div>
+
           <div className="flex shrink-0 items-center gap-1 sm:gap-2">
-            {pickerCollapsed && !fullscreen ? (
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => setPickerCollapsed(false)}
-                className="touch-manipulation md:hidden"
-                title="Show machines & sessions"
-              >
-                <Monitor className="size-4" />
-                <span className="text-xs">Sessions</span>
-              </Button>
-            ) : null}
             <Button
               size={fullscreen ? 'icon' : 'sm'}
               variant={viewMode === 'chat' ? 'secondary' : 'outline'}
               onClick={toggleViewMode}
               title={
                 viewMode === 'chat'
-                  ? 'Switch to classic terminal'
-                  : 'Stream view (coming soon)'
+                  ? 'Switch to the classic terminal'
+                  : 'Switch to the readable stream view'
               }
               aria-label={
                 viewMode === 'chat'
-                  ? 'Switch to classic terminal'
-                  : 'Stream view (coming soon)'
+                  ? 'Switch to the classic terminal'
+                  : 'Switch to the readable stream view'
               }
               aria-pressed={viewMode === 'chat'}
-              className="touch-manipulation max-md:size-9"
+              className="shrink-0 touch-manipulation max-md:size-9"
             >
               {viewMode === 'chat' ? (
                 <TerminalIcon className="size-4" />
               ) : (
                 <MessageSquareText className="size-4" />
               )}
-              <span className="hidden sm:inline">
+              {/* Labels only where the desktop layout starts — between sm and
+                  md the header is still the phone one and they overflow it. */}
+              <span className="hidden md:inline">
                 {viewMode === 'chat' ? 'Classic' : 'Stream'}
               </span>
             </Button>
@@ -555,17 +509,18 @@ export function WorkspacePage() {
               title={fullscreen ? 'Exit fullscreen (Esc)' : 'Fullscreen terminal'}
               aria-label={fullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
               aria-pressed={fullscreen}
-              className="touch-manipulation max-md:size-9"
+              className="shrink-0 touch-manipulation max-md:size-9"
             >
               {fullscreen ? (
                 <Minimize2 className="size-4" />
               ) : (
                 <>
                   <Maximize2 className="size-4" />
-                  <span className="hidden sm:inline">Fullscreen</span>
+                  <span className="hidden md:inline">Fullscreen</span>
                 </>
               )}
             </Button>
+            {/* New / Close are one tap away in the strip and the picker on phones. */}
             {!fullscreen ? (
               <>
                 <Button
@@ -573,42 +528,40 @@ export function WorkspacePage() {
                   variant="outline"
                   disabled={!selectedMachineId || busy}
                   onClick={() => void onNewSession()}
-                  className="touch-manipulation"
+                  className="hidden touch-manipulation md:inline-flex"
                 >
                   <Plus className="size-4" />
-                  <span className="hidden sm:inline">New session</span>
+                  <span className="hidden lg:inline">New session</span>
                 </Button>
                 {selectedSession ? (
                   <Button
                     size="sm"
                     variant="ghost"
                     onClick={() => void onCloseSession(selectedSession.id)}
-                    className="touch-manipulation"
+                    className="hidden touch-manipulation md:inline-flex"
                   >
                     <Trash2 className="size-4" />
-                    <span className="hidden sm:inline">Close</span>
+                    <span className="hidden lg:inline">Close</span>
                   </Button>
                 ) : null}
               </>
-            ) : (
-              <Button
-                size="icon"
-                variant="ghost"
-                disabled={!selectedMachineId || busy}
-                onClick={() => void onNewSession()}
-                title="New session"
-                aria-label="New session"
-                className="size-9 touch-manipulation"
-              >
-                <Plus className="size-4" />
-              </Button>
-            )}
+            ) : null}
           </div>
         </header>
 
-        {/* Immersive session strip — switch shells without leaving fullscreen */}
-        {fullscreen && sessions.length > 0 ? (
-          <div className="flex shrink-0 gap-1.5 overflow-x-auto border-b border-border bg-muted/30 px-2 py-1.5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        {/*
+          Session tabs. Always on phones — switching shells used to mean opening
+          a picker that covered the terminal. Desktop keeps them for immersive
+          mode, where the picker column is hidden.
+        */}
+        {sessions.length > 0 ? (
+          <div
+            className={cn(
+              'flex shrink-0 gap-1.5 overflow-x-auto border-b border-border bg-muted/30 px-2 py-1.5',
+              '[-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden',
+              fullscreen ? 'flex' : 'md:hidden',
+            )}
+          >
             {sessions.map((s) => {
               const live = mountedSessionIds.includes(s.id)
               const selected = s.id === selectedSessionId
@@ -638,6 +591,16 @@ export function WorkspacePage() {
                 </button>
               )
             })}
+            <button
+              type="button"
+              onClick={() => void onNewSession()}
+              disabled={!selectedMachineId || busy}
+              title="New session"
+              aria-label="New session"
+              className="flex size-8 shrink-0 touch-manipulation items-center justify-center rounded-full bg-background/80 text-foreground transition-colors hover:bg-muted disabled:opacity-50"
+            >
+              <Plus className="size-4" />
+            </button>
           </div>
         ) : null}
 
@@ -648,10 +611,11 @@ export function WorkspacePage() {
         ) : null}
 
         <div
-          className={cn(
-            'relative min-h-0 flex-1',
-            viewMode === 'chat' ? 'bg-background' : 'bg-black',
-          )}
+          className="relative min-h-0 flex-1"
+          style={{
+            background:
+              viewMode === 'chat' ? undefined : terminalSurface(appTheme),
+          }}
         >
           {token && mountedSessionIds.length > 0 ? (
             mountedSessionIds.map((id) => (
@@ -660,7 +624,7 @@ export function WorkspacePage() {
                 className={cn(
                   'absolute',
                   // Desktop: small inset when not immersive; mobile fills the pane.
-                  // Chat mode always edge-to-edge on the light surface.
+                  // Stream mode always edge-to-edge on the app surface.
                   viewMode === 'chat' || fullscreen
                     ? 'inset-0'
                     : 'inset-0 md:inset-2',
@@ -676,6 +640,9 @@ export function WorkspacePage() {
                   active={id === selectedSessionId}
                   layoutEpoch={layoutEpoch}
                   viewMode={viewMode}
+                  theme={appTheme}
+                  fontSize={fontSize}
+                  softKeys={softKeys}
                   onStatus={(status) =>
                     setStatusById((prev) =>
                       prev[id] === status ? prev : { ...prev, [id]: status },
@@ -685,30 +652,22 @@ export function WorkspacePage() {
               </div>
             ))
           ) : (
-            <div
-              className={cn(
-                'flex h-full flex-col items-center justify-center gap-2 p-6 text-center text-sm',
-                viewMode === 'chat'
-                  ? 'text-muted-foreground'
-                  : 'text-neutral-400',
-              )}
-            >
+            <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center text-sm text-muted-foreground">
               <TerminalIcon className="size-8 opacity-50" />
               <p>
                 Create a session for each task. Switching sessions keeps the
                 shell and scrollback — only Close tears it down.
               </p>
-              <p
-                className={cn(
-                  'text-xs md:hidden',
-                  viewMode === 'chat'
-                    ? 'text-muted-foreground/80'
-                    : 'text-neutral-500',
-                )}
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={!selectedMachineId || busy}
+                onClick={() => void onNewSession()}
+                className="mt-1 touch-manipulation"
               >
-                Tip: use Classic terminal for the full TTY. Stream view is
-                coming soon.
-              </p>
+                <Plus className="size-4" />
+                New session
+              </Button>
             </div>
           )}
         </div>
@@ -727,12 +686,235 @@ function isNarrowViewport(): boolean {
   return window.matchMedia('(max-width: 640px)').matches
 }
 
+/**
+ * Machines, sessions and per-device terminal settings. Rendered twice — as the
+ * desktop column and inside the phone sheet — so the two can never drift.
+ */
+function WorkspacePicker({
+  machines,
+  sessions,
+  selectedMachineId,
+  selectedSessionId,
+  selectedMachine,
+  mountedSessionIds,
+  busy,
+  fontSize,
+  softKeys,
+  onSelectMachine,
+  onSelectSession,
+  onNewSession,
+  onCloseSession,
+  onFontSize,
+  onToggleSoftKeys,
+}: {
+  machines: Machine[]
+  sessions: TerminalSession[]
+  selectedMachineId: string
+  selectedSessionId: string
+  selectedMachine?: Machine
+  mountedSessionIds: string[]
+  busy: boolean
+  fontSize: number
+  softKeys: boolean
+  onSelectMachine: (id: string) => void
+  onSelectSession: (id: string) => void
+  onNewSession: () => void
+  onCloseSession: (id: string) => void
+  onFontSize: (delta: number) => void
+  onToggleSoftKeys: () => void
+}) {
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <div
+        data-picker-head
+        className="flex items-center justify-between gap-2 px-3 py-3"
+      >
+        <div className="flex items-center gap-2 text-sm font-semibold">
+          <Monitor className="size-4" />
+          Workspace
+        </div>
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={!selectedMachineId || busy}
+          onClick={onNewSession}
+          title="New terminal session"
+        >
+          <Plus className="size-4" />
+          New
+        </Button>
+      </div>
+      <Separator />
+
+      <div className="px-3 py-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+        Machines
+      </div>
+      <ScrollArea className="max-h-40 px-2">
+        {machines.length === 0 ? (
+          <p className="px-2 py-2 text-xs text-muted-foreground">
+            No machines. Register one under Machines.
+          </p>
+        ) : (
+          <ul className="flex flex-col gap-0.5 pb-2">
+            {machines.map((m) => (
+              <li key={m.id}>
+                <button
+                  type="button"
+                  onClick={() => onSelectMachine(m.id)}
+                  className={cn(
+                    'flex w-full flex-col rounded-md px-2 py-2 text-left text-sm transition-colors',
+                    m.id === selectedMachineId
+                      ? 'bg-sidebar-accent text-sidebar-accent-foreground'
+                      : 'hover:bg-muted/60',
+                  )}
+                >
+                  <span className="font-medium leading-tight">{m.name}</span>
+                  <span className="font-mono text-[10px] text-muted-foreground">
+                    {m.ssh_user}@{m.address}:{m.port}
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </ScrollArea>
+
+      <Separator />
+      <div className="px-3 py-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+        Sessions
+        {selectedMachine ? (
+          <span className="normal-case tracking-normal text-muted-foreground/80">
+            {' '}
+            · {selectedMachine.name}
+          </span>
+        ) : null}
+      </div>
+      <ScrollArea className="min-h-0 flex-1 px-2">
+        {sessions.length === 0 ? (
+          <p className="px-2 py-3 text-xs text-muted-foreground">
+            No sessions yet. Create one per task; switching tabs keeps each
+            shell alive.
+          </p>
+        ) : (
+          <ul className="flex flex-col gap-0.5 pb-3">
+            {sessions.map((s) => {
+              const live = mountedSessionIds.includes(s.id)
+              return (
+                <li key={s.id} className="group flex items-stretch gap-0.5">
+                  <button
+                    type="button"
+                    onClick={() => onSelectSession(s.id)}
+                    className={cn(
+                      'flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-2.5 text-left text-sm transition-colors',
+                      s.id === selectedSessionId
+                        ? 'bg-primary text-primary-foreground'
+                        : 'hover:bg-muted/60',
+                    )}
+                  >
+                    <TerminalIcon className="size-3.5 shrink-0 opacity-80" />
+                    <span className="truncate font-medium">{s.name}</span>
+                    {live ? (
+                      <span
+                        className={cn(
+                          'ml-auto size-1.5 shrink-0 rounded-full',
+                          s.id === selectedSessionId
+                            ? 'bg-primary-foreground/80'
+                            : 'bg-emerald-500',
+                        )}
+                        title="Live shell attached"
+                      />
+                    ) : null}
+                  </button>
+                  <button
+                    type="button"
+                    className="rounded-md px-2 text-muted-foreground opacity-0 transition-opacity hover:bg-destructive/10 hover:text-destructive group-hover:opacity-100 max-md:opacity-100"
+                    title="Close session"
+                    aria-label={`Close ${s.name}`}
+                    onClick={() => onCloseSession(s.id)}
+                  >
+                    <X className="size-3.5" />
+                  </button>
+                </li>
+              )
+            })}
+          </ul>
+        )}
+      </ScrollArea>
+
+      <Separator />
+      <div className="flex flex-col gap-2 p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-xs text-muted-foreground">Text size</span>
+          <div className="flex items-center gap-1">
+            <Button
+              size="icon"
+              variant="outline"
+              className="size-8 touch-manipulation"
+              onClick={() => onFontSize(-1)}
+              disabled={fontSize <= TERMINAL_FONT_MIN}
+              title="Smaller terminal text"
+              aria-label="Smaller terminal text"
+            >
+              <span className="text-xs">A−</span>
+            </Button>
+            <span className="w-8 text-center font-mono text-xs text-muted-foreground">
+              {fontSize}
+            </span>
+            <Button
+              size="icon"
+              variant="outline"
+              className="size-8 touch-manipulation"
+              onClick={() => onFontSize(1)}
+              disabled={fontSize >= TERMINAL_FONT_MAX}
+              title="Larger terminal text"
+              aria-label="Larger terminal text"
+            >
+              <span className="text-sm">A+</span>
+            </Button>
+          </div>
+        </div>
+        <label className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+          <span>Soft keys (Esc, Tab, Ctrl…)</span>
+          <input
+            type="checkbox"
+            className="size-4 accent-primary"
+            checked={softKeys}
+            onChange={onToggleSoftKeys}
+          />
+        </label>
+      </div>
+    </div>
+  )
+}
+
+/** Seed the stream feed from what xterm already has, so switching view keeps history. */
+function seedFeedFromTerminal(feed: StreamFeed, term: XTerm, maxLines = 200) {
+  const buf = term.buffer.active
+  const end = buf.length
+  const start = Math.max(0, end - maxLines)
+  const lines: string[] = []
+  for (let i = start; i < end; i++) {
+    const line = buf.getLine(i)
+    if (!line) continue
+    const text = line.translateToString(true)
+    // A long logical line occupies several rows; joining them back keeps the
+    // reader from showing one command split across three "lines".
+    if (line.isWrapped && lines.length > 0) lines[lines.length - 1] += text
+    else lines.push(text)
+  }
+  const text = lines.join('\n').replace(/\n+$/, '')
+  if (text.trim()) feedPush(feed, `${text}\n`)
+}
+
 function SessionTerminal({
   sessionId,
   token,
   active,
   layoutEpoch = 0,
   viewMode = 'classic',
+  theme,
+  fontSize,
+  softKeys,
   onStatus,
 }: {
   sessionId: string
@@ -742,6 +924,9 @@ function SessionTerminal({
   layoutEpoch?: number
   /** Global presentation mode — does not remount WS/xterm. */
   viewMode?: TerminalViewMode
+  theme: ResolvedTheme
+  fontSize: number
+  softKeys: boolean
   onStatus: (s: string) => void
 }) {
   const containerRef = useRef<HTMLDivElement>(null)
@@ -758,16 +943,90 @@ function SessionTerminal({
   activeRef.current = active
   viewModeRef.current = viewMode
 
+  // Theme and font size are xterm *options*, not construction args: changing
+  // them must never rebuild the terminal, or the shell and scrollback would go
+  // with it. The mount effect reads the current value through these refs.
+  const themeRef = useRef(theme)
+  themeRef.current = theme
+  const fontSizeRef = useRef(fontSize)
+  fontSizeRef.current = fontSize
+
+  /** Sticky Ctrl from the soft key bar — applies to the next key typed. */
+  const [ctrlArmed, setCtrlArmed] = useState(false)
+  const ctrlArmedRef = useRef(false)
+  ctrlArmedRef.current = ctrlArmed
+
+  /**
+   * Stream feed lives in a ref and is only fed while stream view is on.
+   * Classic — the default — pays nothing for PTY volume, which is what made
+   * the first attempt at this view unusable.
+   */
+  const feedRef = useRef<StreamFeed | null>(null)
+  if (!feedRef.current) feedRef.current = createStreamFeed()
+  const feedTimerRef = useRef(0)
+  const [feedGen, setFeedGen] = useState(0)
+
   const setStatus = useCallback((s: string) => {
     statusRef.current = s
     onStatusRef.current(s)
   }, [])
 
+  /** Coalesce PTY bursts into at most ~8 React commits per second. */
+  const scheduleFeedUi = useCallback(() => {
+    if (viewModeRef.current !== 'chat') return
+    if (feedTimerRef.current) return
+    feedTimerRef.current = window.setTimeout(() => {
+      feedTimerRef.current = 0
+      setFeedGen(feedRef.current?.gen ?? 0)
+    }, 120)
+  }, [])
+
+  const sendStdin = useCallback((data: string) => {
+    const ws = wsRef.current
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'stdin', data }))
+    }
+  }, [])
+
+  /** Soft key press: raw bytes straight to the PTY, and un-stick Ctrl. */
+  const onSoftKey = useCallback(
+    (data: string) => {
+      sendStdin(data)
+      setCtrlArmed(false)
+      if (viewModeRef.current === 'classic') termRef.current?.focus()
+    },
+    [sendStdin],
+  )
+
+  const onToggleKeyboard = useCallback(() => {
+    const term = termRef.current
+    if (!term) return
+    // xterm keeps focus in a hidden textarea; blurring it drops the OS keyboard.
+    const helper = containerRef.current?.querySelector<HTMLTextAreaElement>(
+      '.xterm-helper-textarea',
+    )
+    if (helper && document.activeElement === helper) helper.blur()
+    else term.focus()
+  }, [])
+
+  const onChatSend = useCallback(
+    (text: string) => {
+      const feed = feedRef.current
+      if (feed) {
+        feedAddUser(feed, text)
+        setFeedGen(feed.gen)
+      }
+      // Line-oriented submit; Enter for most shells / agent CLIs.
+      sendStdin(text.endsWith('\n') || text.endsWith('\r') ? text : `${text}\r`)
+    },
+    [sendStdin],
+  )
+
   /**
    * Fit the terminal to its host and notify PTY only when cols/rows change.
    * Debounced by default — continuous visualViewport noise was causing
    * mobile fullscreen thrash (text redraw / “echo” look).
-   * Stream placeholder mode keeps a fixed cols/rows for the remote PTY.
+   * Stream mode keeps a fixed cols/rows for the remote PTY.
    */
   const fitAndNotify = useCallback((opts?: { immediate?: boolean }) => {
     const run = () => {
@@ -779,7 +1038,7 @@ function SessionTerminal({
       // Hidden / zero-size panes: measuring them collapses the PTY.
       if (!activeRef.current) return
 
-      // Chat mode: host may be off-screen with zero size — use fixed geometry.
+      // Stream mode: host may be off-screen with zero size — use fixed geometry.
       if (viewModeRef.current === 'chat') {
         const cols = 100
         const rows = 32
@@ -847,15 +1106,11 @@ function SessionTerminal({
     const mobile = prefersCoarsePointer() || isNarrowViewport()
     const term = new XTerm({
       cursorBlink: !mobile,
-      fontSize: mobile ? 12 : 14,
+      fontSize: fontSizeRef.current,
       lineHeight: 1.15,
       fontFamily:
         'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
-      theme: {
-        background: '#0a0a0a',
-        foreground: '#e5e5e5',
-        cursor: '#e5e5e5',
-      },
+      theme: xtermTheme(themeRef.current),
       scrollback: mobile ? 2000 : 5000,
       // Avoid animated scroll redraw jank on soft devices.
       smoothScrollDuration: 0,
@@ -914,6 +1169,24 @@ function SessionTerminal({
       }
     }
 
+    /** Mirror into the stream feed only while that view is the one on screen. */
+    const feedText = (data: string) => {
+      if (viewModeRef.current !== 'chat') return
+      const feed = feedRef.current
+      if (!feed) return
+      if (feedPush(feed, data)) scheduleFeedUi()
+    }
+
+    const write = (data: string) => {
+      term.write(data)
+      feedText(data)
+    }
+
+    const writeln = (line: string) => {
+      term.writeln(line)
+      feedText(`${line}\n`)
+    }
+
     const connect = () => {
       if (disposed) return
       clearReconnect()
@@ -956,7 +1229,7 @@ function SessionTerminal({
         // WS is up — SSH dial still in flight on the API. Do not say "connected"
         // (users read that as "shell ready" and stare at a black cursor).
         setStatus('opening ssh…')
-        term.writeln('\x1b[90m[ws connected — opening remote shell…]\x1b[0m')
+        writeln('\x1b[90m[ws connected — opening remote shell…]\x1b[0m')
         try {
           ws.send(
             JSON.stringify({
@@ -978,7 +1251,7 @@ function SessionTerminal({
           if (disposed || gen !== socketGen || hadReady || openFailed) return
           openFailed = true
           setStatus('error')
-          term.writeln(
+          writeln(
             '\x1b[31m[ssh open timed out — no shell from server. Check machine SSH/Tailscale, then New session.]\x1b[0m',
           )
           try {
@@ -1016,7 +1289,7 @@ function SessionTerminal({
         const delay = Math.min(1000 * 2 ** reconnectAttempt, 15_000)
         reconnectAttempt += 1
         setStatus('reconnecting…')
-        term.writeln(
+        writeln(
           `\x1b[33m[connection lost — reconnecting in ${Math.round(delay / 1000)}s…]\x1b[0m`,
         )
         reconnectTimer = window.setTimeout(() => {
@@ -1037,38 +1310,35 @@ function SessionTerminal({
             approval_url?: string
             retryable?: boolean
           }
-          // Classic xterm only — stream feed parsing is disabled (coming soon).
           if (msg.type === 'stdout' && msg.data) {
             sawStdout = true
             clearPoke()
-            term.write(msg.data)
+            write(msg.data)
           } else if (msg.type === 'error') {
             clearOpenWatch()
             clearPoke()
             openFailed = true
             setStatus('error')
-            term.writeln(`\x1b[31m${msg.message ?? 'ssh error'}\x1b[0m`)
+            writeln(`\x1b[31m${msg.message ?? 'ssh error'}\x1b[0m`)
             // The server classifies why the open failed. Show the fix and any
             // approval link instead of leaving a bare timeout on a black screen.
             if (msg.kind) {
-              term.writeln(`\x1b[90m[cause: ${msg.kind}]\x1b[0m`)
+              writeln(`\x1b[90m[cause: ${msg.kind}]\x1b[0m`)
             }
             if (msg.approval_url) {
-              term.writeln(
-                `\x1b[36m[approve this login: ${msg.approval_url}]\x1b[0m`,
-              )
+              writeln(`\x1b[36m[approve this login: ${msg.approval_url}]\x1b[0m`)
             }
             if (msg.hint) {
-              term.writeln(`\x1b[33m${msg.hint}\x1b[0m`)
+              writeln(`\x1b[33m${msg.hint}\x1b[0m`)
             }
-            term.writeln(
+            writeln(
               msg.retryable === false
                 ? '\x1b[33m[auto-reconnect off — retrying cannot fix this; apply the fix above, then New session]\x1b[0m'
                 : '\x1b[33m[stopped auto-reconnect — click the session again or New session to retry]\x1b[0m',
             )
           } else if (msg.type === 'status' && msg.message) {
             setStatus('opening ssh…')
-            term.writeln(`\x1b[90m[${msg.message}]\x1b[0m`)
+            writeln(`\x1b[90m[${msg.message}]\x1b[0m`)
           } else if (msg.type === 'ready') {
             clearOpenWatch()
             openFailed = false
@@ -1076,9 +1346,9 @@ function SessionTerminal({
             hadReady = true
             setStatus('ssh ready')
             if (resume) {
-              term.writeln('\x1b[32m[reconnected — same tmux session]\x1b[0m')
+              writeln('\x1b[32m[reconnected — same tmux session]\x1b[0m')
             } else {
-              term.writeln(`\x1b[90m[${msg.message ?? 'ssh ready'}]\x1b[0m`)
+              writeln(`\x1b[90m[${msg.message ?? 'ssh ready'}]\x1b[0m`)
             }
             // Some hosts (or empty tmux panes) open a PTY but never paint a
             // prompt. Nudge with Enter once so the user is not stuck on a
@@ -1088,9 +1358,7 @@ function SessionTerminal({
               if (disposed || gen !== socketGen || sawStdout) return
               const sock = currentWs
               if (sock && sock.readyState === WebSocket.OPEN) {
-                term.writeln(
-                  '\x1b[33m[no shell output yet — sending Enter…]\x1b[0m',
-                )
+                writeln('\x1b[33m[no shell output yet — sending Enter…]\x1b[0m')
                 try {
                   sock.send(JSON.stringify({ type: 'stdin', data: '\r' }))
                 } catch {
@@ -1101,7 +1369,7 @@ function SessionTerminal({
           }
           // pong ignored
         } catch {
-          term.write(String(ev.data))
+          write(String(ev.data))
         }
       }
     }
@@ -1110,9 +1378,17 @@ function SessionTerminal({
 
     const dataDisp = term.onData((data) => {
       const ws = currentWs
-      if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: 'stdin', data }))
+      if (!ws || ws.readyState !== WebSocket.OPEN) return
+      let out = data
+      // Sticky Ctrl from the soft key bar: the OS keyboard sends a plain
+      // letter, we turn it into the control code the shell expects.
+      if (ctrlArmedRef.current) {
+        const ctrl = controlSequence(data)
+        if (ctrl !== null) out = ctrl
+        ctrlArmedRef.current = false
+        setCtrlArmed(false)
       }
+      ws.send(JSON.stringify({ type: 'stdin', data: out }))
     })
 
     // Prefer ResizeObserver on the host over window/visualViewport spam.
@@ -1165,6 +1441,8 @@ function SessionTerminal({
       clearPoke()
       clearOpenWatch()
       window.clearTimeout(fitTimerRef.current)
+      window.clearTimeout(feedTimerRef.current)
+      feedTimerRef.current = 0
       window.removeEventListener('resize', onWindowResize)
       vv?.removeEventListener('resize', onWindowResize)
       document.removeEventListener('visibilitychange', onVisibility)
@@ -1196,6 +1474,19 @@ function SessionTerminal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId, token])
 
+  useEffect(() => {
+    const term = termRef.current
+    if (!term) return
+    term.options.theme = xtermTheme(theme)
+  }, [theme])
+
+  useEffect(() => {
+    const term = termRef.current
+    if (!term) return
+    term.options.fontSize = fontSize
+    if (active) fitAndNotify({ immediate: true })
+  }, [fontSize, active, fitAndNotify])
+
   // Layout change (fullscreen / vv size / view mode): refit only — do NOT re-focus.
   // Re-focusing on every fit re-opens the soft keyboard and restarts the jump cycle.
   useEffect(() => {
@@ -1213,6 +1504,19 @@ function SessionTerminal({
     }
   }, [active, layoutEpoch, viewMode, fitAndNotify])
 
+  // Entering stream view: seed from what xterm already holds, so the feed is
+  // not blank until the next command. Nothing is re-parsed after this.
+  useEffect(() => {
+    if (viewMode !== 'chat') return
+    const feed = feedRef.current
+    const term = termRef.current
+    if (!feed || !term) return
+    if (feed.blocks.length === 0 && !feed.open) {
+      seedFeedFromTerminal(feed, term)
+    }
+    setFeedGen(feed.gen)
+  }, [viewMode])
+
   // Focus classic xterm once when this tab becomes active (user selected the session).
   useEffect(() => {
     if (!active || viewMode !== 'classic') return
@@ -1222,43 +1526,57 @@ function SessionTerminal({
 
   const isChat = viewMode === 'chat'
 
+  const chatItems = useMemo((): ChatFeedItem[] => {
+    if (!isChat) return []
+    const feed = feedRef.current
+    if (!feed) return []
+    void feedGen
+    return feedSnapshot(feed).map((b) =>
+      b.kind === 'user'
+        ? ({ type: 'user', id: b.id, text: b.text } as const)
+        : ({ type: 'block', id: b.id, block: b } as const),
+    )
+  }, [isChat, feedGen])
+
   return (
-    <div className="relative h-full w-full">
-      {/*
-        Keep xterm mounted always so scrollback + WS stay alive when toggling.
-        Stream mode parks it off-screen (still receives writes, no feed parse).
-      */}
-      <div
-        ref={containerRef}
-        className={cn(
-          'ah-xterm-host',
-          isChat
-            ? 'pointer-events-none absolute h-px w-px overflow-hidden opacity-0'
-            : 'h-full w-full',
-        )}
-        aria-hidden={isChat}
-        // Stop page-level rubber-band; xterm viewport still scrolls inside.
-        onTouchMove={(e) => {
-          if (!isChat) e.stopPropagation()
-        }}
-      />
-      {isChat ? (
+    <div className="relative flex h-full w-full flex-col">
+      <div className="relative min-h-0 flex-1">
+        {/*
+          Keep xterm mounted always so scrollback + WS stay alive when toggling.
+          Stream mode parks it off-screen (still receives writes).
+        */}
         <div
-          className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-background p-8 text-center"
-          role="status"
-        >
-          <MessageSquareText className="size-10 text-muted-foreground/50" />
-          <div className="space-y-1">
-            <p className="text-base font-medium text-foreground">
-              Stream view
-            </p>
-            <p className="text-sm text-muted-foreground">Coming soon</p>
-          </div>
-          <p className="max-w-xs text-xs text-muted-foreground/80">
-            Readable mobile feed is temporarily disabled. Switch to Classic for
-            the full terminal.
-          </p>
-        </div>
+          ref={containerRef}
+          className={cn(
+            'ah-xterm-host',
+            isChat
+              ? 'pointer-events-none absolute h-px w-px overflow-hidden opacity-0'
+              : 'h-full w-full',
+          )}
+          aria-hidden={isChat}
+          // Stop page-level rubber-band; xterm viewport still scrolls inside.
+          onTouchMove={(e) => {
+            if (!isChat) e.stopPropagation()
+          }}
+        />
+        {isChat ? (
+          <TerminalChatView
+            className="absolute inset-0"
+            items={chatItems}
+            status={statusRef.current}
+            active={active}
+            onSend={onChatSend}
+          />
+        ) : null}
+      </div>
+
+      {softKeys && !isChat ? (
+        <TerminalKeyBar
+          onSend={onSoftKey}
+          ctrlArmed={ctrlArmed}
+          onToggleCtrl={() => setCtrlArmed((v) => !v)}
+          onToggleKeyboard={onToggleKeyboard}
+        />
       ) : null}
     </div>
   )

@@ -21,6 +21,18 @@ export const FEED_MAX_LINES = 300
 export const FEED_MAX_CHARS = 48_000
 /** Merge consecutive plain output into fewer blocks. */
 export const FEED_GROUP_LINES = 24
+/**
+ * Hard caps on the *in-progress* line and escape sequence.
+ *
+ * The block list was already bounded, but the line editor was not: a program
+ * printing megabytes with no newline (`cat` on a binary, a progress bar that
+ * only uses CR) grew `buf` forever, and every character appended re-built the
+ * whole string — quadratic, on the WebSocket message path. Same for a
+ * truncated escape sequence, which was carried into the next chunk and
+ * re-parsed from the start each time. Both froze the tab.
+ */
+export const MAX_PENDING_LINE = 4096
+export const MAX_PENDING_ESC = 512
 /** Remember last N user inputs to drop shell echoes. */
 const RECENT_USER_MAX = 12
 
@@ -32,6 +44,16 @@ const THINKING_CLOSE =
   /^(?:<\/\s*thinking\s*>|\[\s*\/\s*thinking\s*\]|end\s+thinking\b)$/i
 const SYSTEM_LINE =
   /^\[(?:connection lost|reconnected|session closed|ssh ready)[^\]]*\]$/i
+
+/**
+ * tmux status bar for one of our own durable sessions, e.g.
+ *   [ah-8a66040:sh*    "host" 21:53 25-Jul-26
+ *
+ * tmux repaints it on a timer, so without this the reader collects a fresh
+ * copy of the clock every minute. The `ah-` prefix is ours (see the store's
+ * remote session naming), so this cannot swallow a user's own output.
+ */
+const TMUX_STATUS_LINE = /^\[ah-[0-9a-f]+:/i
 
 /**
  * Shell prompt at start of line, e.g.:
@@ -177,6 +199,15 @@ function editorBackspace(ed: LineEditor) {
   ed.buf = ed.buf.slice(0, ed.cursor) + ed.buf.slice(ed.cursor + 1)
 }
 
+/**
+ * Remember an unfinished escape sequence for the next chunk — unless it has
+ * grown past anything a real sequence could be, in which case it is garbage
+ * (or binary) and carrying it only costs re-parses.
+ */
+function setPendingEsc(ed: LineEditor, pending: string) {
+  ed.esc = pending.length > MAX_PENDING_ESC ? '' : pending
+}
+
 function editorEraseLine(ed: LineEditor, mode: number) {
   if (mode === 2) {
     editorReset(ed)
@@ -302,6 +333,8 @@ export function normalizeCommittedLine(
   // Drop pure cursor/status leftovers / dangling quote from PS2 close
   if (/^[[\]?0-9;]*$/.test(text)) return null
   if (/^['"`\\]+$/.test(text.trim())) return null
+
+  if (TMUX_STATUS_LINE.test(text)) return null
 
   if (isUserEcho(feed, text)) return null
 
@@ -475,7 +508,7 @@ export function feedPush(feed: StreamFeed, chunk: string): boolean {
 
     if (c === 0x1b) {
       if (i + 1 >= s.length) {
-        ed.esc = s.slice(i)
+        setPendingEsc(ed, s.slice(i))
         break
       }
       const next = s.charCodeAt(i + 1)
@@ -492,7 +525,7 @@ export function feedPush(feed: StreamFeed, chunk: string): boolean {
           j++
         }
         if (j >= s.length) {
-          ed.esc = s.slice(i)
+          setPendingEsc(ed, s.slice(i))
           break
         }
         continue
@@ -504,7 +537,7 @@ export function feedPush(feed: StreamFeed, chunk: string): boolean {
         !s.includes('\u0007', i) &&
         !s.includes('\u001b\\', i)
       ) {
-        ed.esc = s.slice(i)
+        setPendingEsc(ed, s.slice(i))
         break
       }
       i = after
@@ -544,6 +577,10 @@ export function feedPush(feed: StreamFeed, chunk: string): boolean {
 
     editorWrite(ed, s[i]!)
     i++
+
+    // A line this long is no longer a line — commit it and start over rather
+    // than keep growing (and re-copying) one string for the rest of the session.
+    if (ed.buf.length >= MAX_PENDING_LINE) commitEditorLine(feed)
   }
 
   return feed.gen !== gen0

@@ -97,7 +97,17 @@ export function AppShell() {
       </Sheet>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex h-14 shrink-0 items-center gap-3 border-b border-border px-4 md:px-6">
+        {/*
+          The workspace on a phone is already two rows of chrome deep before the
+          shell starts, so this bar drops to one compact line there. Every other
+          page — and every desktop width — keeps the full header.
+        */}
+        <header
+          className={cn(
+            'flex shrink-0 items-center gap-3 border-b border-border px-4 md:h-14 md:px-6',
+            isWorkspace ? 'h-11' : 'h-14',
+          )}
+        >
           <Button
             variant="ghost"
             size="icon"
@@ -123,7 +133,12 @@ export function AppShell() {
             <span className="truncate text-sm font-medium">
               Multi-Machine Terminal Dashboard
             </span>
-            <span className="truncate text-xs text-muted-foreground">
+            <span
+              className={cn(
+                'truncate text-xs text-muted-foreground',
+                isWorkspace ? 'hidden md:block' : '',
+              )}
+            >
               {user.username} · {user.role}
             </span>
           </div>
