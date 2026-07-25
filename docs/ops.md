@@ -357,7 +357,9 @@ If `ufw` is active, tailnet traffic is usually already allowed via a
 2. Is JWT login / Tailscale identity failing?
 3. Is the target machine still registered and reachable?
 4. Is tmux/session bridge healthy on that machine?
-5. Check audit log for recent access and errors (when M5 ships).
+5. Check the **Audit** page (admin only) for recent logins, machine changes and
+   connection checks — a failed `machine.check` records its classified `kind`,
+   so the log usually dates the breakage precisely.
 
 **Hit “Test connection” on the Machines page first.** It dials and authenticates
 the same way the terminal bridge does, then reports the classified cause and its
@@ -375,6 +377,7 @@ Each cause has a different fix:
 | `bad_private_key` | The stored PEM key does not parse | Re-paste the full key incl. BEGIN/END; set the passphrase |
 | `unreachable` | Nothing accepted TCP | Host down, wrong port, or firewall |
 | `timeout` | Connected, then the remote stopped responding | Loaded or suspended host |
+| `host_key_changed` | The host presented a different key than the one recorded on first connect | If you rebuilt the machine, delete and re-register it to record the new key. Otherwise treat it as a possible man-in-the-middle and investigate before connecting |
 
 Causes marked non-retryable disable auto-reconnect on purpose — retrying a
 pending browser approval just piles up hung dials on the target.

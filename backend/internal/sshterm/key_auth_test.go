@@ -69,7 +69,7 @@ func TestAuthPlanRejectsMalformedKey(t *testing.T) {
 }
 
 func TestDialSurfacesBadKeyAsClassifiedFailure(t *testing.T) {
-	_, _, err := dialRaw(Target{Address: "100.64.0.10", User: "ops", PrivateKey: "bogus"}, time.Time{})
+	_, _, _, err := dialRaw(Target{Address: "100.64.0.10", User: "ops", PrivateKey: "bogus"}, time.Time{})
 	if err == nil {
 		t.Fatal("expected failure")
 	}
@@ -91,7 +91,7 @@ func TestDialSurfacesBadKeyAsClassifiedFailure(t *testing.T) {
 func TestBadKeyFailsBeforeDialing(t *testing.T) {
 	start := time.Now()
 	// 203.0.113.0/24 is TEST-NET-3: guaranteed not to answer.
-	_, _, err := dialRaw(Target{Address: "203.0.113.1", User: "ops", PrivateKey: "bogus"}, time.Time{})
+	_, _, _, err := dialRaw(Target{Address: "203.0.113.1", User: "ops", PrivateKey: "bogus"}, time.Time{})
 	if err == nil {
 		t.Fatal("expected failure")
 	}

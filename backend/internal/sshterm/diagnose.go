@@ -46,6 +46,10 @@ const (
 	FailBadKey FailureKind = "bad_private_key"
 	// FailTimeout — the remote accepted TCP then stopped responding.
 	FailTimeout FailureKind = "timeout"
+	// FailHostKeyChanged — the host presented a different key than the one
+	// recorded on first connect. Either the host was rebuilt, or something is
+	// impersonating it.
+	FailHostKeyChanged FailureKind = "host_key_changed"
 )
 
 // Failure is a structured, user-actionable explanation of a failed open.
@@ -177,7 +181,14 @@ func isAuthRejection(err error) bool {
 	s := strings.ToLower(err.Error())
 	return strings.Contains(s, "unable to authenticate") ||
 		strings.Contains(s, "no supported methods remain") ||
-		strings.Contains(s, "permission denied")
+		strings.Contains(s, "permission denied") ||
+		// A server that refuses keyboard-interactive instead of prompting sends
+		// SSH_MSG_USERAUTH_FAILURE (51) where the client expected an info
+		// request (60). Go surfaces that message-type mismatch verbatim, with
+		// no word resembling "authenticate" — so without this it lands in
+		// `unknown`, which is retryable, and the bridge reconnects forever
+		// against a host that will never accept the credential.
+		strings.Contains(s, "unexpected message type 51")
 }
 
 const (
@@ -214,7 +225,24 @@ const (
 
 	hintTimeout = "The remote accepted the connection then stopped responding before the shell " +
 		"started. Usually a loaded or half-suspended host."
+
+	hintHostKeyChanged = "The host key recorded on first connect no longer matches. This is what a " +
+		"man-in-the-middle looks like, so the connection was refused. If you legitimately " +
+		"rebuilt or reinstalled this machine, delete it from Machines and register it again " +
+		"to record the new key. Otherwise investigate before connecting."
 )
+
+// hostKeyMismatchError is returned by the host key callback so Diagnose can tell
+// a pinned-key mismatch apart from an ordinary handshake failure — the SSH
+// library folds callback errors into a generic handshake error string.
+type hostKeyMismatchError struct {
+	Expected string
+	Got      string
+}
+
+func (e *hostKeyMismatchError) Error() string {
+	return "host key mismatch: expected " + e.Expected + ", got " + e.Got
+}
 
 // Diagnose turns a raw open failure into an actionable Failure. It reads the
 // authentication trace first: when the remote actually told us what it wants,
@@ -231,6 +259,19 @@ func Diagnose(stage Stage, err error, tr *authTrace, t Target) Failure {
 			ApprovalURL: strings.TrimRight(url, ".,)"),
 			Hint:        hintTailscaleCheck,
 			Retryable:   false,
+		}
+	}
+
+	// A changed host key outranks every other reading of a handshake failure:
+	// the transport never got far enough for auth or routing to be the story.
+	var mismatch *hostKeyMismatchError
+	if errors.As(err, &mismatch) {
+		return Failure{
+			Kind: FailHostKeyChanged,
+			Message: "the host key for " + t.addr() + " changed since it was first recorded (expected " +
+				mismatch.Expected + ", got " + mismatch.Got + ")",
+			Hint:      hintHostKeyChanged,
+			Retryable: false,
 		}
 	}
 

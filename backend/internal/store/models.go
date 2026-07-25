@@ -48,8 +48,12 @@ type Machine struct {
 	// targets set PasswordAuthentication=no, where a key is the only way in.
 	SSHPrivateKey string `json:"ssh_private_key,omitempty"`
 	// SSHKeyPassphrase decrypts SSHPrivateKey when it is encrypted.
-	SSHKeyPassphrase string    `json:"ssh_key_passphrase,omitempty"`
-	CreatedAt        time.Time `json:"created_at"`
+	SSHKeyPassphrase string `json:"ssh_key_passphrase,omitempty"`
+	// HostKeyFingerprint is the server key recorded on the first successful
+	// connect ("SHA256:…"). Later connects must present the same key or they
+	// are refused — trust on first use, since there is no known_hosts to seed.
+	HostKeyFingerprint string    `json:"host_key_fingerprint,omitempty"`
+	CreatedAt          time.Time `json:"created_at"`
 }
 
 // MachineSpec is the caller-supplied part of a machine registration. It is a
@@ -73,20 +77,24 @@ type MachinePublic struct {
 	SSHUser string `json:"ssh_user"`
 	// HasPrivateKey tells the UI which credential is in play without ever
 	// sending the key itself.
-	HasPrivateKey bool      `json:"has_private_key"`
-	CreatedAt     time.Time `json:"created_at"`
+	HasPrivateKey bool `json:"has_private_key"`
+	// HostKeyFingerprint is safe to publish — it is the host's public identity,
+	// and showing it lets an operator compare against `ssh-keyscan`.
+	HostKeyFingerprint string    `json:"host_key_fingerprint,omitempty"`
+	CreatedAt          time.Time `json:"created_at"`
 }
 
 // Public returns an API-safe machine without secrets.
 func (m Machine) Public() MachinePublic {
 	return MachinePublic{
-		ID:            m.ID,
-		Name:          m.Name,
-		Address:       m.Address,
-		Port:          m.Port,
-		SSHUser:       m.SSHUser,
-		HasPrivateKey: strings.TrimSpace(m.SSHPrivateKey) != "",
-		CreatedAt:     m.CreatedAt,
+		ID:                 m.ID,
+		Name:               m.Name,
+		Address:            m.Address,
+		Port:               m.Port,
+		SSHUser:            m.SSHUser,
+		HasPrivateKey:      strings.TrimSpace(m.SSHPrivateKey) != "",
+		HostKeyFingerprint: m.HostKeyFingerprint,
+		CreatedAt:          m.CreatedAt,
 	}
 }
 

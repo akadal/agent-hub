@@ -102,6 +102,18 @@ Lightweight log of decisions that affect structure. Full product requirements st
 
 ---
 
+## ADR-009: Trust-on-first-use host key pinning
+
+| Field | Value |
+|-------|--------|
+| Status | accepted |
+| Date | 2026-07-25 |
+| Context | The SSH bridge shipped with `ssh.InsecureIgnoreHostKey()`, so it accepted whatever key answered on a machine's address. For a product whose function is opening interactive root shells, that removes the one check that makes SSH safe on a network you do not fully control — anything that can answer on that address gets the session, the credential and the shell. Standard `known_hosts` is not directly available: machines are registered through a web form by operators who typically do not have the target's fingerprint at hand, so requiring one up front would block ordinary onboarding. |
+| Decision | **Trust on first use.** A machine starts unpinned; the first successful connect records the presented key as `Machine.HostKeyFingerprint` (`SHA256:…`). Every later connect must present the same key or the handshake is aborted and classified `host_key_changed` with `Retryable: false`. `Store.PinMachineHostKey` **never overwrites** an existing pin — accepting a replacement is exactly the outcome an impostor wants — so a legitimately rebuilt host is re-adopted by deleting and re-registering the machine. The fingerprint is public data and is returned in `MachinePublic` so an operator can compare it against `ssh-keyscan`. All four SSH call sites now build their target through one `sshTarget(m)` helper, so a new credential field cannot reach three paths and miss the fourth. |
+| Consequences | A man-in-the-middle on the path to a registered machine is refused rather than silently served. The cost is a real failure mode operators must understand: re-imaging a host breaks its pin on purpose, and the fix is re-registration, which `docs/ops.md` §7 spells out. TOFU still trusts the very first connect, so it does not protect an attacker who is already in position at registration time — pinning by hand at registration would, and remains open as a later refinement. |
+
+---
+
 ## How to add an ADR
 
 1. Increment `ADR-NNN`.

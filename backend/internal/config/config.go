@@ -7,6 +7,14 @@ import (
 	"time"
 )
 
+// Demo fallbacks. They keep `docker compose up` working with no .env, but a
+// deployment still running on them is one stolen JWT away from a root shell —
+// so main warns loudly when they are in play.
+const (
+	DefaultJWTSecret     = "dev-only-change-me-agent-hub"
+	DefaultAdminPassword = "123456"
+)
+
 // Config holds runtime settings from the environment.
 type Config struct {
 	HTTPAddr                   string
@@ -43,7 +51,7 @@ func Load() Config {
 	}
 	secret := os.Getenv("JWT_SECRET")
 	if secret == "" {
-		secret = "dev-only-change-me-agent-hub"
+		secret = DefaultJWTSecret
 	}
 	// Demo defaults only — override in real deploys via env / .env
 	user := os.Getenv("BOOTSTRAP_ADMIN_USERNAME")
@@ -52,7 +60,7 @@ func Load() Config {
 	}
 	pass := os.Getenv("BOOTSTRAP_ADMIN_PASSWORD")
 	if pass == "" {
-		pass = "123456"
+		pass = DefaultAdminPassword
 	}
 	addr := os.Getenv("HTTP_ADDR")
 	if addr == "" {

@@ -207,3 +207,38 @@ func TestOpenErrorCarriesFailureAndUnwraps(t *testing.T) {
 		t.Fatal("errors.As should recover the structured failure")
 	}
 }
+
+// A real OpenSSH/dropbear that refuses keyboard-interactive answers with
+// SSH_MSG_USERAUTH_FAILURE (51) where the client expected an info request (60).
+// Go reports that verbatim — it contains nothing resembling "authenticate", so
+// the classifier used to call it `unknown`, which is Retryable. The bridge then
+// reconnects forever against a host that will never accept the credential: the
+// exact storm ADR-007 exists to prevent.
+//
+// String observed by running `cmd/sshdiag` against the Compose ssh-target with
+// a wrong password.
+func TestWrongPasswordOnOrdinarySSHDIsAnAuthFailureNotUnknown(t *testing.T) {
+	err := errors.New("ssh: handshake failed: ssh: unexpected message type 51 (expected 60)")
+	f := Diagnose(StageHandshake, err, nil, Target{Address: "10.0.0.5", Port: 22, User: "root"})
+
+	if f.Kind != FailAuth {
+		t.Fatalf("kind = %q, want %q", f.Kind, FailAuth)
+	}
+	if f.Retryable {
+		t.Fatal("reconnecting cannot fix a rejected credential")
+	}
+	if f.Hint == "" {
+		t.Fatal("an auth failure must carry its fix")
+	}
+}
+
+// The same rejection on port 22 of a tailnet address is Tailscale's ACL talking,
+// not sshd — the port-aware split from ADR-008 must survive this new match.
+func TestUserauthFailureOnTailscalePort22IsBlamedOnTheACL(t *testing.T) {
+	err := errors.New("ssh: handshake failed: ssh: unexpected message type 51 (expected 60)")
+	f := Diagnose(StageHandshake, err, nil, Target{Address: "100.64.0.10", Port: 22, User: "ops"})
+
+	if f.Kind != FailTailscaleDenied {
+		t.Fatalf("kind = %q, want %q", f.Kind, FailTailscaleDenied)
+	}
+}

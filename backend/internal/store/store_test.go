@@ -337,3 +337,79 @@ func TestTerminalSessions_underMachine(t *testing.T) {
 		t.Fatal("expected no terminals after machine delete")
 	}
 }
+
+// A pin is recorded once and never silently replaced: overwriting a stored host
+// key is precisely what an attacker swapping in their own server would want.
+func TestPinMachineHostKeyRecordsOnceAndRefusesToOverwrite(t *testing.T) {
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := st.CreateMachine("owner", store.MachineSpec{Name: "box", Address: "10.0.0.5"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.HostKeyFingerprint != "" {
+		t.Fatal("a new machine must start unpinned so the first connect can learn the key")
+	}
+
+	pinned, err := st.PinMachineHostKey(m.ID, "SHA256:original")
+	if err != nil || !pinned {
+		t.Fatalf("first pin: pinned=%v err=%v", pinned, err)
+	}
+	got, _ := st.GetMachine(m.ID)
+	if got.HostKeyFingerprint != "SHA256:original" {
+		t.Fatalf("fingerprint = %q, want SHA256:original", got.HostKeyFingerprint)
+	}
+
+	pinned, err = st.PinMachineHostKey(m.ID, "SHA256:impostor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pinned {
+		t.Fatal("a second pin must not report a write")
+	}
+	got, _ = st.GetMachine(m.ID)
+	if got.HostKeyFingerprint != "SHA256:original" {
+		t.Fatalf("pin was overwritten to %q — a rebuilt host must go through delete-and-re-register",
+			got.HostKeyFingerprint)
+	}
+
+	// An empty observation is a no-op, not a way to clear the pin.
+	if _, err := st.PinMachineHostKey(m.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = st.GetMachine(m.ID)
+	if got.HostKeyFingerprint != "SHA256:original" {
+		t.Fatal("an empty fingerprint must not clear the pin")
+	}
+}
+
+// The pin must survive a restart, or every reboot silently re-trusts whatever
+// answers next.
+func TestPinnedHostKeySurvivesReload(t *testing.T) {
+	dir := t.TempDir()
+	st, err := store.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := st.CreateMachine("owner", store.MachineSpec{Name: "box", Address: "10.0.0.5"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.PinMachineHostKey(m.ID, "SHA256:persisted"); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := store.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := reopened.GetMachine(m.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.HostKeyFingerprint != "SHA256:persisted" {
+		t.Fatalf("after reload fingerprint = %q, want SHA256:persisted", got.HostKeyFingerprint)
+	}
+}

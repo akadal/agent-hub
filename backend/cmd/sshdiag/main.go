@@ -8,6 +8,10 @@
 //
 // The SSH password is read from AGENT_HUB_SSH_PASSWORD so it does not show up
 // in the process list. Tailscale SSH targets ignore it entirely.
+//
+// On success it prints the host key fingerprint, so you can read a host's
+// identity before registering it and compare it with `ssh-keyscan` after.
+// Set AGENT_HUB_SSH_HOST_KEY to check against an expected fingerprint.
 package main
 
 import (
@@ -36,6 +40,7 @@ func main() {
 		User:          os.Args[3],
 		Password:      os.Getenv("AGENT_HUB_SSH_PASSWORD"),
 		KeyPassphrase: os.Getenv("AGENT_HUB_SSH_KEY_PASSPHRASE"),
+		HostKey:       os.Getenv("AGENT_HUB_SSH_HOST_KEY"),
 	}
 	if path := os.Getenv("AGENT_HUB_SSH_KEY_FILE"); path != "" {
 		key, err := os.ReadFile(path)
@@ -50,6 +55,9 @@ func main() {
 	if err == nil {
 		defer sess.Close()
 		fmt.Println("RESULT: open OK")
+		// Printing it makes this the tool for reading a host's fingerprint
+		// before registering the machine, and for confirming one afterwards.
+		fmt.Println("host key:", sess.HostKey())
 		return
 	}
 

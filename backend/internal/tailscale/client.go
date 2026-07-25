@@ -24,14 +24,14 @@ type Client struct {
 
 // Device is a minimal view of a tailnet node for import.
 type Device struct {
-	ID         string   `json:"id"`
-	Name       string   `json:"name"`       // MagicDNS FQDN when available
-	Hostname   string   `json:"hostname"`
-	OS         string   `json:"os"`
-	Addresses  []string `json:"addresses"`
-	Authorized bool     `json:"authorized"`
+	ID         string    `json:"id"`
+	Name       string    `json:"name"` // MagicDNS FQDN when available
+	Hostname   string    `json:"hostname"`
+	OS         string    `json:"os"`
+	Addresses  []string  `json:"addresses"`
+	Authorized bool      `json:"authorized"`
 	LastSeen   time.Time `json:"last_seen"`
-	Online     bool     `json:"online"`
+	Online     bool      `json:"online"`
 	// PreferredAddress is the best SSH target (IPv4 100.x preferred).
 	PreferredAddress string `json:"preferred_address"`
 }

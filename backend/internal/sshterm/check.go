@@ -21,6 +21,9 @@ type CheckResult struct {
 	// Elapsed is how long the attempt took, so a slow-but-working host is
 	// visible as slow rather than mistaken for broken.
 	ElapsedMS int64 `json:"elapsed_ms"`
+	// HostKey is the fingerprint the remote presented. Set only when OK — the
+	// caller pins it on a machine's first successful connect.
+	HostKey string `json:"host_key,omitempty"`
 }
 
 // Check dials and authenticates, then hangs up. It answers "can the hub reach
@@ -29,7 +32,7 @@ type CheckResult struct {
 // and reading a black screen.
 func Check(t Target) CheckResult {
 	start := time.Now()
-	client, raw, err := dialRaw(t, time.Now().Add(checkTimeout))
+	client, raw, hostKey, err := dialRaw(t, time.Now().Add(checkTimeout))
 	elapsed := time.Since(start).Milliseconds()
 
 	if err != nil {
@@ -46,5 +49,5 @@ func Check(t Target) CheckResult {
 
 	_ = raw.SetDeadline(time.Time{})
 	_ = client.Close()
-	return CheckResult{OK: true, ElapsedMS: elapsed}
+	return CheckResult{OK: true, ElapsedMS: elapsed, HostKey: hostKey}
 }

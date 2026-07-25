@@ -261,6 +261,7 @@ func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	s.audit(r, "user.create", "", "", u.Username+" role="+u.Role)
 	writeJSON(w, http.StatusCreated, u.Public())
 }
 
@@ -289,11 +290,22 @@ func (s *Server) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	// Record *what* changed, never the new secret itself.
+	changed := make([]string, 0, 2)
+	if req.Password != "" {
+		changed = append(changed, "password")
+	}
+	if req.Role != "" {
+		changed = append(changed, "role="+u.Role)
+	}
+	s.audit(r, "user.update", "", "", u.Username+" "+strings.Join(changed, " "))
 	writeJSON(w, http.StatusOK, u.Public())
 }
 
 func (s *Server) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	// Read before deleting so the audit entry names a human, not a bare UUID.
+	deleted, _ := s.Store.GetUser(id)
 	if err := s.Store.DeleteUser(id); err != nil {
 		switch {
 		case errors.Is(err, store.ErrNotFound):
@@ -305,6 +317,7 @@ func (s *Server) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	s.audit(r, "user.delete", "", "", deleted.Username)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -467,6 +480,9 @@ func (s *Server) handleTailscaleImport(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		known[d.PreferredAddress] = true
+		// Audit each row: a bulk import is still N machine registrations, and
+		// "where did this host come from" must be answerable per machine.
+		s.audit(r, "machine.create", m.ID, "", m.Name+" @ "+m.Address+" (tailscale import)")
 		added = append(added, m.Public())
 	}
 
@@ -524,6 +540,35 @@ type execRequest struct {
 	Command string `json:"command"`
 }
 
+// sshTarget is the single place a stored machine becomes SSH connection
+// parameters. It used to be inlined at every call site, which is how the
+// private-key fields once reached three of four paths.
+func sshTarget(m store.Machine) sshterm.Target {
+	return sshterm.Target{
+		Address:       m.Address,
+		Port:          m.Port,
+		User:          m.SSHUser,
+		Password:      m.SSHPassword,
+		PrivateKey:    m.SSHPrivateKey,
+		KeyPassphrase: m.SSHKeyPassphrase,
+		HostKey:       m.HostKeyFingerprint,
+	}
+}
+
+// pinHostKey records the host key seen on a machine's first successful connect.
+// Nothing is overwritten once a key is pinned, so this is safe to call after
+// every connect.
+func (s *Server) pinHostKey(machineID, fingerprint string) {
+	pinned, err := s.Store.PinMachineHostKey(machineID, fingerprint)
+	if err != nil {
+		s.logf("pin host key for %s: %v", machineID, err)
+		return
+	}
+	if pinned {
+		s.logf("pinned host key for machine %s: %s", machineID, fingerprint)
+	}
+}
+
 // handleMachineCheck answers "can the hub reach this machine, and if not why"
 // without opening a terminal. Before this, the only way to find out was to open
 // a session and stare at a black xterm until something timed out.
@@ -534,19 +579,20 @@ func (s *Server) handleMachineCheck(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "machine not found")
 		return
 	}
-	res := sshterm.Check(sshterm.Target{
-		Address:       m.Address,
-		Port:          m.Port,
-		User:          m.SSHUser,
-		Password:      m.SSHPassword,
-		PrivateKey:    m.SSHPrivateKey,
-		KeyPassphrase: m.SSHKeyPassphrase,
-	})
+	res := sshterm.Check(sshTarget(m))
+	if res.OK {
+		s.pinHostKey(m.ID, res.HostKey)
+	}
+	// A check authenticates with the stored credential, so it belongs in the
+	// audit trail — and the recorded verdict is what makes the log readable
+	// afterwards ("it was already failing at 09:51, kind=tailscale_check_pending").
 	if res.OK {
 		s.logf("machineCheck ok %s@%s:%d in %dms", m.SSHUser, m.Address, m.Port, res.ElapsedMS)
+		s.audit(r, "machine.check", m.ID, "", fmt.Sprintf("ok in %dms", res.ElapsedMS))
 	} else {
 		s.logf("machineCheck failed %s@%s:%d in %dms: %s — %s",
 			m.SSHUser, m.Address, m.Port, res.ElapsedMS, res.Failure.Kind, res.Failure.Message)
+		s.audit(r, "machine.check", m.ID, "", fmt.Sprintf("failed [%s] in %dms", res.Failure.Kind, res.ElapsedMS))
 	}
 	// Always 200: the check ran successfully even when the machine is broken.
 	// The body carries the verdict.
@@ -593,15 +639,7 @@ func (s *Server) runExec(w http.ResponseWriter, r *http.Request, m store.Machine
 		writeErr(w, http.StatusBadRequest, "command is required")
 		return
 	}
-	res, err := sshterm.RunCommand(sshterm.Target{
-		Address:  m.Address,
-		Port:     m.Port,
-		User:     m.SSHUser,
-		Password: m.SSHPassword,
-
-		PrivateKey:    m.SSHPrivateKey,
-		KeyPassphrase: m.SSHKeyPassphrase,
-	}, req.Command)
+	res, err := sshterm.RunCommand(sshTarget(m), req.Command)
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, "ssh exec failed: "+err.Error())
 		return
@@ -749,15 +787,7 @@ func (s *Server) handleCloseTerminal(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "terminal session not found")
 		return
 	}
-	_ = sshterm.KillRemoteSession(sshterm.Target{
-		Address:  m.Address,
-		Port:     m.Port,
-		User:     m.SSHUser,
-		Password: m.SSHPassword,
-
-		PrivateKey:    m.SSHPrivateKey,
-		KeyPassphrase: m.SSHKeyPassphrase,
-	}, t.RemoteSession)
+	_ = sshterm.KillRemoteSession(sshTarget(m), t.RemoteSession)
 	if err := s.Store.CloseTerminal(id); err != nil {
 		writeErr(w, http.StatusNotFound, "terminal session not found")
 		return
@@ -1043,21 +1073,14 @@ func (s *Server) bridgeSSH(w http.ResponseWriter, r *http.Request, m store.Machi
 	})
 
 	openStart := time.Now()
-	sess, err := sshterm.OpenSession(sshterm.Target{
-		Address:  m.Address,
-		Port:     m.Port,
-		User:     m.SSHUser,
-		Password: m.SSHPassword,
-
-		PrivateKey:    m.SSHPrivateKey,
-		KeyPassphrase: m.SSHKeyPassphrase,
-	}, remoteSession, cols, rows)
+	sess, err := sshterm.OpenSession(sshTarget(m), remoteSession, cols, rows)
 	if err != nil {
 		s.logf("bridgeSSH open failed %s after %s: %v", target, time.Since(openStart).Round(time.Millisecond), err)
 		_ = writeMsg(sshOpenErrorMsg(err))
 		return
 	}
 	defer sess.Close()
+	s.pinHostKey(m.ID, sess.HostKey())
 	s.logf("bridgeSSH open ok %s in %s (%s)", target, time.Since(openStart).Round(time.Millisecond), label)
 
 	msg := "ssh session open (" + label + ")"

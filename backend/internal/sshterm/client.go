@@ -24,6 +24,11 @@ type Target struct {
 	PrivateKey string
 	// KeyPassphrase decrypts PrivateKey when it is encrypted.
 	KeyPassphrase string
+	// HostKey is the server key fingerprint recorded on a previous successful
+	// connect ("SHA256:…"). Empty means trust-on-first-use: whatever the host
+	// presents is accepted and reported back so the caller can pin it. Once
+	// set, a different key aborts the handshake.
+	HostKey string
 }
 
 // dialTimeout is only for the initial TCP connect, not session lifetime.
@@ -107,10 +112,40 @@ func buildAuthPlan(t Target, tr *authTrace) (authPlan, error) {
 	return plan, nil
 }
 
+// hostKeyPin implements trust-on-first-use host key checking.
+//
+// The alternative the bridge used to ship — InsecureIgnoreHostKey — accepts any
+// key from anything answering on that address, which is exactly the check that
+// makes SSH safe over a network you do not control. There is no known_hosts
+// file to seed here (machines are registered through a web form), so the first
+// successful connect records the key and every later one must match it.
+type hostKeyPin struct {
+	expected string // "" on first use
+	seen     string // fingerprint the host actually presented
+	mu       sync.Mutex
+}
+
+func (p *hostKeyPin) callback(_ string, _ net.Addr, key ssh.PublicKey) error {
+	fp := ssh.FingerprintSHA256(key)
+	p.mu.Lock()
+	p.seen = fp
+	p.mu.Unlock()
+	if p.expected == "" || p.expected == fp {
+		return nil
+	}
+	return &hostKeyMismatchError{Expected: p.expected, Got: fp}
+}
+
+func (p *hostKeyPin) fingerprint() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.seen
+}
+
 // clientConfig builds the SSH client config. Anything the server says during
 // authentication lands in tr — the banner is where Tailscale SSH explains a
 // check-mode stall, and dropping it is why that used to look like a bare timeout.
-func clientConfig(t Target, tr *authTrace, plan authPlan) *ssh.ClientConfig {
+func clientConfig(t Target, tr *authTrace, plan authPlan, pin *hostKeyPin) *ssh.ClientConfig {
 	t = t.normalized()
 	return &ssh.ClientConfig{
 		User: t.User,
@@ -119,33 +154,35 @@ func clientConfig(t Target, tr *authTrace, plan authPlan) *ssh.ClientConfig {
 			tr.add(message)
 			return nil
 		},
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		HostKeyCallback: pin.callback,
 		Timeout:         dialTimeout,
 	}
 }
 
 // Dial opens an authenticated SSH client with TCP + SSH keepalives.
 func Dial(t Target) (*ssh.Client, error) {
-	client, _, err := dialRaw(t, time.Time{})
+	client, _, _, err := dialRaw(t, time.Time{})
 	return client, err
 }
 
 // dialRaw dials and authenticates. If openDeadline is non-zero, it is set on the
 // TCP connection for the handshake (and cleared before return on success).
-// The raw conn is returned so callers can keep a deadline during PTY/start.
+// The raw conn is returned so callers can keep a deadline during PTY/start, and
+// the host key fingerprint so a first connect can pin what it saw.
 //
 // Failures come back as *OpenError so callers get a classified cause instead of
 // a bare "i/o timeout" they have to guess about.
-func dialRaw(t Target, openDeadline time.Time) (*ssh.Client, net.Conn, error) {
+func dialRaw(t Target, openDeadline time.Time) (*ssh.Client, net.Conn, string, error) {
 	t = t.normalized()
 	addr := t.addr()
 	tr := &authTrace{}
+	pin := &hostKeyPin{expected: strings.TrimSpace(t.HostKey)}
 
 	// Validate credentials before touching the network, so a key that does not
 	// parse is reported instantly instead of after a dial timeout.
 	plan, err := buildAuthPlan(t, tr)
 	if err != nil {
-		return nil, nil, &OpenError{Failure: Diagnose(StageAuthSetup, err, tr, t), Err: err}
+		return nil, nil, "", &OpenError{Failure: Diagnose(StageAuthSetup, err, tr, t), Err: err}
 	}
 
 	// The TCP connect must fit inside the caller's overall budget. Without this
@@ -160,7 +197,7 @@ func dialRaw(t Target, openDeadline time.Time) (*ssh.Client, net.Conn, error) {
 	}
 	raw, err := net.DialTimeout("tcp", addr, connectTimeout)
 	if err != nil {
-		return nil, nil, &OpenError{Failure: Diagnose(StageDial, err, tr, t), Err: err}
+		return nil, nil, "", &OpenError{Failure: Diagnose(StageDial, err, tr, t), Err: err}
 	}
 	if tcp, ok := raw.(*net.TCPConn); ok {
 		_ = tcp.SetKeepAlive(true)
@@ -170,12 +207,12 @@ func dialRaw(t Target, openDeadline time.Time) (*ssh.Client, net.Conn, error) {
 		_ = raw.SetDeadline(openDeadline)
 	}
 
-	cc, chans, reqs, err := ssh.NewClientConn(raw, addr, clientConfig(t, tr, plan))
+	cc, chans, reqs, err := ssh.NewClientConn(raw, addr, clientConfig(t, tr, plan, pin))
 	if err != nil {
 		_ = raw.Close()
-		return nil, nil, &OpenError{Failure: Diagnose(StageHandshake, err, tr, t), Err: err}
+		return nil, nil, "", &OpenError{Failure: Diagnose(StageHandshake, err, tr, t), Err: err}
 	}
-	return ssh.NewClient(cc, chans, reqs), raw, nil
+	return ssh.NewClient(cc, chans, reqs), raw, pin.fingerprint(), nil
 }
 
 // ExecResult is the outcome of a one-shot remote command.
@@ -225,6 +262,9 @@ type Session struct {
 	stdin   io.WriteCloser
 	stdout  io.Reader
 	raw     net.Conn
+	// hostKey is the fingerprint this host presented, so a first connect can
+	// persist what it saw and later ones can be checked against it.
+	hostKey string
 
 	stopOnce sync.Once
 	stopKA   chan struct{}
@@ -246,7 +286,7 @@ func OpenSession(t Target, remoteSession string, cols, rows int) (*Session, erro
 	}
 	deadline := time.Now().Add(openTimeout)
 
-	client, raw, err := dialRaw(t, deadline)
+	client, raw, hostKey, err := dialRaw(t, deadline)
 	if err != nil {
 		return nil, fmt.Errorf("ssh dial: %w", err)
 	}
@@ -312,11 +352,15 @@ func OpenSession(t Target, remoteSession string, cols, rows int) (*Session, erro
 		stdin:   stdin,
 		stdout:  stdout,
 		raw:     raw,
+		hostKey: hostKey,
 		stopKA:  make(chan struct{}),
 	}
 	go s.keepaliveLoop()
 	return s, nil
 }
+
+// HostKey is the fingerprint the remote presented for this session.
+func (s *Session) HostKey() string { return s.hostKey }
 
 func (s *Session) keepaliveLoop() {
 	t := time.NewTicker(keepaliveInterval)

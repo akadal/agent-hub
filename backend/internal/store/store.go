@@ -76,8 +76,12 @@ func grantKey(userID, machineID string) string {
 }
 
 // Open creates or loads a store at dataDir/store.json.
+//
+// The directory is owner-only: store.json holds SSH passwords and private keys
+// in plaintext (D-009), so a world-readable data dir would hand every local
+// account the fleet's credentials.
 func Open(dataDir string) (*Store, error) {
-	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+	if err := os.MkdirAll(dataDir, 0o700); err != nil {
 		return nil, err
 	}
 	path := filepath.Join(dataDir, "store.json")
@@ -131,12 +135,19 @@ func (s *Store) EnsureBootstrapAdmin(username, password string) error {
 	return s.saveLocked()
 }
 
+// dummyHash is a real bcrypt hash of a value nobody can supply. Authenticate
+// compares against it when the username is unknown so both branches pay the
+// same ~60ms; otherwise the response time alone tells an attacker which
+// usernames exist.
+var dummyHash = []byte("$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy")
+
 // Authenticate checks username/password and returns the user on success.
 func (s *Store) Authenticate(username, password string) (User, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	id, ok := s.byName[username]
 	if !ok {
+		_ = bcrypt.CompareHashAndPassword(dummyHash, []byte(password))
 		return User{}, ErrInvalidCreds
 	}
 	u := s.users[id]
@@ -307,6 +318,31 @@ func (s *Store) CreateMachine(ownerUserID string, spec MachineSpec) (Machine, er
 		return Machine{}, err
 	}
 	return m, nil
+}
+
+// PinMachineHostKey records the host key fingerprint observed on a machine's
+// first successful connect. It never overwrites an existing pin: replacing a
+// recorded key is exactly what an attacker would want, so a genuine host
+// rebuild goes through delete-and-re-register instead.
+//
+// Reports whether it wrote anything.
+func (s *Store) PinMachineHostKey(id, fingerprint string) (bool, error) {
+	fingerprint = strings.TrimSpace(fingerprint)
+	if fingerprint == "" {
+		return false, nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	m, ok := s.machines[id]
+	if !ok {
+		return false, ErrNotFound
+	}
+	if m.HostKeyFingerprint != "" {
+		return false, nil
+	}
+	m.HostKeyFingerprint = fingerprint
+	s.machines[id] = m
+	return true, s.saveLocked()
 }
 
 // ListMachines returns machines for ownerUserID (empty ownerID = all).
