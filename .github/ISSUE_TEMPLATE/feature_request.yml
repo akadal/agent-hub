@@ -1,0 +1,29 @@
+name: Feature request
+description: Suggest something Agent Hub should do
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please skim [`docs/prd.md`](../blob/main/docs/prd.md) first — some things
+        are deliberately out of scope (file transfer, RDP/VNC, auto-discovery),
+        and [`docs/backlog.md`](../blob/main/docs/backlog.md) may already list it.
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do that Agent Hub makes hard today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you have in mind
+      description: A rough shape is fine. How would you expect to use it?
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you do instead today
+      description: Workarounds, other tools, or "nothing — I gave up".

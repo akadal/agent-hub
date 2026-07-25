@@ -4,6 +4,8 @@
 Manage SSH hosts from the browser, open **multiple independent terminal sessions per machine**, and keep each task in its own session — similar in spirit to multi-session agent UIs (Claude Code / Codex-style workspace), without locking you to a cloud vendor.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![CI](https://github.com/akadal/agent-hub/actions/workflows/ci.yml/badge.svg)](https://github.com/akadal/agent-hub/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/badge/release-v1.0.0-brightgreen.svg)](CHANGELOG.md)
 
 ---
 
@@ -24,16 +26,17 @@ Tailscale (or any VPN) can sit under your network path, but **it is not required
 
 | Area | What’s included |
 |------|------------------|
-| Auth | Local users, JWT sessions, bootstrap admin from env |
+| Auth | Local users, JWT sessions, bootstrap admin from env, self-service password change, failed-login throttle |
 | Users & permissions | Multi-user CRUD, admin/user roles, per-machine grants with a management UI |
 | Machines | Register / list / delete by IP or hostname; import from a Tailscale tailnet |
 | Credentials | SSH password **or** private key (encrypted keys supported); keys never leave the API |
+| Host identity | Host keys pinned on first connect; a changed key aborts the session instead of handing over the credential |
 | Diagnostics | Per-machine **connection check** that names the cause (unreachable, bad key, auth refused, Tailscale approval pending) instead of failing blind |
 | Sessions | 1:N named terminal sessions under a machine; create, switch, close |
 | Terminal | Interactive xterm.js UI, **tmux-backed** so sessions survive disconnects, plus a one-shot `exec` API |
 | Reconnect | WebSocket + SSH keepalives and auto-reattach after phone sleep or network flap |
 | Audit | Append-only log of logins, machine/user/grant changes and terminal use, with an operator UI |
-| Ops | Docker Compose: `api`, `web`, optional `ssh-target` for e2e |
+| Ops | Docker Compose (`api`, `web`, optional `ssh-target` for e2e), graceful shutdown, version reported by `/health` and the UI |
 
 **Not in this release (planned):** Tailscale identity login (local JWT is the only auth path today), credential encryption at rest, audit export/retention jobs.
 
@@ -68,7 +71,7 @@ docker compose up --build
 - Username: `admin`
 - Password: `123456`
 
-Override with `BOOTSTRAP_ADMIN_USERNAME` / `BOOTSTRAP_ADMIN_PASSWORD` in `.env` before first start.
+Override with `BOOTSTRAP_ADMIN_USERNAME` / `BOOTSTRAP_ADMIN_PASSWORD` in `.env` before first start, then change it from **Settings → Change password** once you are in. Changing the env value and restarting re-applies it — that is the recovery path if the password is lost; leaving it unchanged never overwrites a password you set in the UI.
 
 ### First minutes
 
@@ -179,6 +182,9 @@ cd backend && AGENT_HUB_SSH_KEY_FILE=~/.ssh/id_ed25519 go run ./cmd/sshdiag 10.0
 
 | Doc | Content |
 |-----|---------|
+| [`CHANGELOG.md`](CHANGELOG.md) | What changed, per release |
+| [`CONTRIBUTING.md`](CONTRIBUTING.md) | Dev setup, tests, PR expectations |
+| [`SECURITY.md`](SECURITY.md) | Reporting a vulnerability; hardening a deploy |
 | [`AGENTS.md`](AGENTS.md) | Entry map for humans & coding agents |
 | [`docs/prd.md`](docs/prd.md) | Product requirements |
 | [`docs/backlog.md`](docs/backlog.md) | Milestones |
@@ -194,17 +200,22 @@ cd backend && AGENT_HUB_SSH_KEY_FILE=~/.ssh/id_ed25519 go run ./cmd/sshdiag 10.0
 - SSH passwords **and private keys** are stored unencrypted in the API data directory so the bridge can use them. Treat `DATA_DIR` as secret: it is owner-only (`0700`), but anyone who can read it holds your fleet's credentials.
 - Prefer private networks (VPN / Tailscale / LAN) for production access; TLS and reverse proxies are operator-provided. The in-app network policy records intent — it does not block traffic.
 - Reaching a host over **Tailscale SSH** (port 22 on a `100.x` address) authenticates by tailnet ACL, not by the credential you stored. See [`docs/ops.md`](docs/ops.md) §6b.
+- Failed logins are throttled **per account** (10 per 5 minutes, then `429`), because behind a reverse proxy every request shares the proxy's address. Broad request-rate limiting belongs at your edge.
+- Full policy, including what is *not* a vulnerability report: [`SECURITY.md`](SECURITY.md).
 
 ---
 
 ## Contributing
 
-Issues and pull requests are welcome. For larger changes, open an issue first and check `docs/prd.md` / `docs/backlog.md` so scope stays aligned.
+Issues and pull requests are welcome — see [`CONTRIBUTING.md`](CONTRIBUTING.md)
+for the dev setup, what CI checks, and where design decisions are recorded. For
+larger changes, open an issue first so scope stays aligned with
+[`docs/prd.md`](docs/prd.md).
 
-1. Fork and branch from `main`
-2. Keep changes focused; add/adjust tests under `backend/`
-3. Run `go test ./...` and (if Compose is up) `./scripts/e2e-smoke.sh`
-4. Open a PR with a clear description
+Found a security problem? Please report it privately — see
+[`SECURITY.md`](SECURITY.md), not a public issue.
+
+Participation is covered by the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ---
 
@@ -216,6 +227,6 @@ MIT — see [LICENSE](LICENSE).
 
 ## Status
 
-**v1 feature-complete and self-hostable.** Login, users and per-machine permissions, machine inventory with connection diagnostics, password or key SSH auth, a multi-session tmux-backed workspace, an audit log, and Compose packaging all work end to end.
+**v1.0.0 — feature-complete and self-hostable.** Login, users and per-machine permissions, machine inventory with connection diagnostics, password or key SSH auth, a multi-session tmux-backed workspace, an audit log, and Compose packaging all work end to end.
 
 Known gaps are tracked openly in [`docs/debt.md`](docs/debt.md) — the notable ones: SSH credentials are stored unencrypted in the data directory, network policy is recorded intent rather than enforcement (secure the edge yourself), and Tailscale identity login is not implemented.

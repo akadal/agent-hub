@@ -1,0 +1,54 @@
+name: Bug report
+description: Something behaves differently than documented
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Found a **security** problem? Do not file it here — use the Security tab
+        → Report a vulnerability. See SECURITY.md.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, what you got instead.
+      placeholder: |
+        1. Registered a machine with …
+        2. Pressed Test connection
+        3. Expected "Reachable", got …
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The line under the sidebar nav, or `curl http://localhost:27341/health`.
+      placeholder: 1.0.0 (84020fd)
+    validations:
+      required: true
+  - type: dropdown
+    id: how-run
+    attributes:
+      label: How are you running it
+      options:
+        - Docker Compose (docker-compose.yml)
+        - Docker Compose + Coolify
+        - go run / npm run dev
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: |
+        API logs (`docker compose logs api`) and, for terminal problems, the
+        browser console. **Scrub hostnames, addresses and credentials first.**
+      render: text
+  - type: textarea
+    id: target
+    attributes:
+      label: The target machine, if relevant
+      description: |
+        OS and sshd setup — password or key auth, tmux present, Tailscale SSH
+        on port 22, anything unusual in the ACL.

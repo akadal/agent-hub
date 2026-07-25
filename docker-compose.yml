@@ -31,7 +31,6 @@ services:
       - "${API_PORT:-27341}:27341"
     environment:
       HTTP_ADDR: ":27341"
-      APP_ENV: ${APP_ENV:-development}
       JWT_SECRET: ${JWT_SECRET:-dev-only-change-me-agent-hub}
       JWT_ACCESS_TTL: ${JWT_ACCESS_TTL:-forever}
       BOOTSTRAP_ADMIN_USERNAME: ${BOOTSTRAP_ADMIN_USERNAME:-admin}

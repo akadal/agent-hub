@@ -41,6 +41,10 @@ Do **not** hardcode operator-specific hostnames, personal domains, or a single P
 .
 ├── AGENTS.md          ← you are here (agent router)
 ├── README.md          ← human-facing overview
+├── CHANGELOG.md       ← per-release history (versions come from here)
+├── CONTRIBUTING.md    ← dev setup, what CI runs, PR expectations
+├── SECURITY.md        ← vulnerability reporting + accepted trade-offs
+├── CODE_OF_CONDUCT.md
 ├── docker-compose.yml
 ├── backend/           ← Go API (cmd/agent-hub, internal/api)
 ├── web/               ← Vite + React + shadcn/ui shell
