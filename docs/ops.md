@@ -116,7 +116,7 @@ Local dev without Compose:
 
 ```bash
 cd backend && go run ./cmd/agent-hub
-cd web && npm install && npm run dev   # proxies /api and /health to :27341
+cd web && npm ci && npm run dev       # proxies /api and /health to :27341
 # Point a machine at a real SSH host or map ssh-target via host port 27343
 ```
 
@@ -186,10 +186,65 @@ so restarting the api also clears it.
 
 ---
 
+## 5b. Credentials at rest
+
+SSH passwords, private keys and key passphrases are sealed with AES-256-GCM
+before they are written to `store.json`; sealed values carry an `enc:v1:`
+prefix. `store.json` on its own is therefore not enough to take over the fleet.
+
+**Where the key lives**
+
+| `CREDENTIAL_KEY` | Key used |
+|---|---|
+| set | SHA-256 of the value you supply (any length) |
+| unset | `DATA_DIR/credential.key`, 32 random bytes, mode `0600`, generated on first start |
+
+The generated key sits next to the data it protects, which is fine for a single
+host but means a snapshot of the volume carries both. Set `CREDENTIAL_KEY` from
+a Docker secret or your platform's secret store to separate them.
+
+**Back it up with the data.** A restored `store.json` without its key is
+unreadable, and the API refuses to start rather than connect with blank
+credentials:
+
+```
+cannot open sealed credential — wrong CREDENTIAL_KEY or a replaced credential.key
+```
+
+**Rotating the key** is not automatic. Changing `CREDENTIAL_KEY` on a store
+that already holds machines produces the error above. To rotate: export the
+audit trail, delete and re-register the affected machines under the new key.
+
+**Upgrading from 1.0.x** needs no action — the first start reads the plaintext
+store and rewrites it sealed.
+
+---
+
+## 5c. Audit retention and export
+
+The audit log is a ring buffer inside the same JSON file: newest
+`AUDIT_MAX_EVENTS` (default 1000) are kept, older rows fall off. The whole log
+is rewritten on every append, so a very large value costs write time on every
+audited action.
+
+- Raise it for a busier instance: `AUDIT_MAX_EVENTS=5000`.
+- Take a copy before it rolls: **Audit → Export CSV**, or
+  `GET /audit/export` with an admin token. The export returns every retained
+  event, not just the 200 the page shows.
+- `login.failed` rows are written by unauthenticated callers, so a burst of bad
+  logins ages the log faster (D-013). The per-account throttle bounds the rate;
+  broad request-rate limiting is still the edge's job.
+
+---
+
 ## 6. Mobile access notes
 
 - Mobile browsers need a **deployed or otherwise reachable** instance (not only the laptop’s `localhost` unless the phone shares that network path, e.g. same Tailscale).
-- UI must remain usable on small screens (see PRD §9).
+- The workspace has a phone layout: machines and sessions live in a sheet
+  behind the panel button, the session strip switches shells without covering
+  the terminal, and a soft-key row supplies Esc, Tab, Ctrl, `^C` and arrows —
+  keys no mobile keyboard has. Turn the row off, or change the terminal text
+  size, in that same sheet.
 - Prefer private mesh access over exposing the control plane to the public internet.
 
 ### 6.1 Terminal disconnects on mobile (known cause + mitigations)

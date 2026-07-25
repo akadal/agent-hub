@@ -47,11 +47,11 @@ jobs:
           node-version: '20'
           cache: npm
           cache-dependency-path: web/package-lock.json
-      # npm install, not npm ci: the lockfile carries optional platform-specific
-      # binaries that drift on linux runners (D-002).
+      # npm ci so a drifted lockfile fails the build instead of being quietly
+      # patched over. See CONTRIBUTING.md for regenerating it on linux.
       - name: install
         working-directory: web
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
       - name: lint
         working-directory: web
         run: npm run lint

@@ -23,10 +23,23 @@ Running the pieces directly instead:
 
 ```bash
 cd backend && go run ./cmd/agent-hub     # API on :27341
-cd web && npm install && npm run dev     # SPA on :27342, proxies /api
+cd web && npm ci && npm run dev          # SPA on :27342, proxies /api
 ```
 
 Requirements for the non-Docker path: Go 1.22+ and Node 20+.
+
+### If you change `web/package.json`
+
+The image and CI both install with `npm ci`, so the lockfile has to be exact —
+and it has to carry the linux-only optional packages a macOS `npm install`
+leaves out. Regenerate it in a container:
+
+```bash
+cd web && docker run --rm -v "$PWD":/w -w /w node:22-alpine \
+  npm install --package-lock-only --no-audit --no-fund
+```
+
+Then check `npm ci` still works on your own machine before pushing.
 
 ## Before you open a pull request
 

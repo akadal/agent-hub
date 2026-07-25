@@ -36,6 +36,10 @@ services:
       BOOTSTRAP_ADMIN_USERNAME: ${BOOTSTRAP_ADMIN_USERNAME:-admin}
       BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-123456}
       DATA_DIR: /data
+      # Empty = generate DATA_DIR/credential.key on first start. Set it to keep
+      # the credential key off the same volume as the store.
+      CREDENTIAL_KEY: ${CREDENTIAL_KEY:-}
+      AUDIT_MAX_EVENTS: ${AUDIT_MAX_EVENTS:-}
       ACCESS_DEFAULT_TAILSCALE_ONLY: ${ACCESS_DEFAULT_TAILSCALE_ONLY:-false}
       # Optional: Machines page "Import from Tailscale" (API access token, not auth key)
       TAILSCALE_API_KEY: ${TAILSCALE_API_KEY:-}

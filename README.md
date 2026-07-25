@@ -5,7 +5,7 @@ Manage SSH hosts from the browser, open **multiple independent terminal sessions
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![CI](https://github.com/akadal/agent-hub/actions/workflows/ci.yml/badge.svg)](https://github.com/akadal/agent-hub/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/badge/release-v1.0.0-brightgreen.svg)](CHANGELOG.md)
+[![Release](https://img.shields.io/badge/release-v1.1.0-brightgreen.svg)](CHANGELOG.md)
 
 ---
 
@@ -29,13 +29,15 @@ Tailscale (or any VPN) can sit under your network path, but **it is not required
 | Auth | Local users, JWT sessions, bootstrap admin from env, self-service password change, failed-login throttle |
 | Users & permissions | Multi-user CRUD, admin/user roles, per-machine grants with a management UI |
 | Machines | Register / list / delete by IP or hostname; import from a Tailscale tailnet |
-| Credentials | SSH password **or** private key (encrypted keys supported); keys never leave the API |
+| Credentials | SSH password **or** private key (encrypted keys supported); keys never leave the API and are **encrypted at rest** |
 | Host identity | Host keys pinned on first connect; a changed key aborts the session instead of handing over the credential |
 | Diagnostics | Per-machine **connection check** that names the cause (unreachable, bad key, auth refused, Tailscale approval pending) instead of failing blind |
 | Sessions | 1:N named terminal sessions under a machine; create, switch, close |
 | Terminal | Interactive xterm.js UI, **tmux-backed** so sessions survive disconnects, plus a one-shot `exec` API |
+| Mobile | Session strip, sheet picker and a soft-key bar (Esc / Tab / Ctrl / arrows) so a phone keyboard can actually drive a shell |
+| Appearance | Light, dark or follow-the-system — terminal palette included |
 | Reconnect | WebSocket + SSH keepalives and auto-reattach after phone sleep or network flap |
-| Audit | Append-only log of logins, machine/user/grant changes and terminal use, with an operator UI |
+| Audit | Append-only log of logins, machine/user/grant changes and terminal use, with an operator UI and CSV export |
 | Ops | Docker Compose (`api`, `web`, optional `ssh-target` for e2e), graceful shutdown, version reported by `/health` and the UI |
 
 **Not in this release (planned):** Tailscale identity login (local JWT is the only auth path today), credential encryption at rest, audit export/retention jobs.
@@ -128,7 +130,9 @@ Copy [`.env.example`](.env.example). Important variables:
 | `JWT_SECRET` | Signing key for access tokens |
 | `JWT_ACCESS_TTL` | `forever` (default) or Go duration (`24h`); no login re-auth when forever |
 | `BOOTSTRAP_ADMIN_USERNAME` / `_PASSWORD` | First admin (created if missing) |
-| `DATA_DIR` | Persistent store directory (Compose volume `/data`) — holds SSH credentials, treat as secret |
+| `DATA_DIR` | Persistent store directory (Compose volume `/data`) — holds the store and, by default, the key that opens it |
+| `CREDENTIAL_KEY` | Optional. Key that encrypts stored SSH credentials. Unset = generated in `DATA_DIR` on first start |
+| `AUDIT_MAX_EVENTS` | Optional. Retained audit rows (default `1000`) |
 | `HTTP_ADDR` | API listen address inside the container (default `:27341`) |
 | `VITE_API_BASE_URL` | Browser-facing API origin. **Leave empty** for same-origin (`web` proxies `/api`) — the recommended setup behind any reverse proxy |
 | `API_PORT` / `WEB_PORT` / `SSH_TARGET_PORT` | Host publish ports (defaults `27341` / `27342` / `27343`) |
@@ -147,7 +151,7 @@ The API logs a warning at startup if `JWT_SECRET` or `BOOTSTRAP_ADMIN_PASSWORD` 
 cd backend && go run ./cmd/agent-hub
 
 # Web (proxies /api and /health to :27341)
-cd web && npm install && npm run dev
+cd web && npm ci && npm run dev
 
 # Tests — the same three suites CI runs
 cd backend && go test ./...
@@ -227,6 +231,6 @@ MIT — see [LICENSE](LICENSE).
 
 ## Status
 
-**v1.0.0 — feature-complete and self-hostable.** Login, users and per-machine permissions, machine inventory with connection diagnostics, password or key SSH auth, a multi-session tmux-backed workspace, an audit log, and Compose packaging all work end to end.
+**v1.1.0 — feature-complete and self-hostable.** Login, users and per-machine permissions, machine inventory with connection diagnostics, password or key SSH auth with credentials encrypted at rest, a multi-session tmux-backed workspace that works on a phone, an audit log with export, and Compose packaging all work end to end.
 
-Known gaps are tracked openly in [`docs/debt.md`](docs/debt.md) — the notable ones: SSH credentials are stored unencrypted in the data directory, network policy is recorded intent rather than enforcement (secure the edge yourself), and Tailscale identity login is not implemented.
+Known gaps are tracked openly in [`docs/debt.md`](docs/debt.md) — the notable ones: network policy is recorded intent rather than enforcement (secure the edge yourself), Tailscale identity login is not implemented, and terminal grants are inherited from the machine rather than set per session.

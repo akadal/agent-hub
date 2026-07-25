@@ -48,8 +48,11 @@ func normalizeRole(role string) (string, error) {
 	}
 }
 
-// Cap audit growth in the JSON file store (MVP retention).
-const maxAuditEvents = 1000
+// DefaultMaxAuditEvents caps audit growth in the JSON file store. The whole
+// log is rewritten on every append, so this is a performance ceiling as much
+// as a retention policy — raise it with AUDIT_MAX_EVENTS on a deployment that
+// wants a longer trail, and export regularly either way (D-005, D-013).
+const DefaultMaxAuditEvents = 1000
 
 // Store is a file-backed persistence layer for users, machines, and terminals.
 type Store struct {
@@ -68,6 +71,12 @@ type Store struct {
 	// "the operator changed the env password" from "the admin changed their own
 	// password in the UI" — see EnsureBootstrapAdmin.
 	bootstrapSeed string
+	// credKey seals SSH credentials before they reach store.json (see crypt.go).
+	credKey []byte
+	// needsResealing is set by load() when it read a pre-encryption store.
+	needsResealing bool
+	// auditMax is the retained event count; see SetAuditLimit.
+	auditMax int
 }
 
 type snapshot struct {
@@ -87,11 +96,16 @@ func grantKey(userID, machineID string) string {
 
 // Open creates or loads a store at dataDir/store.json.
 //
-// The directory is owner-only: store.json holds SSH passwords and private keys
-// in plaintext (D-009), so a world-readable data dir would hand every local
-// account the fleet's credentials.
+// The directory is owner-only, and SSH credentials inside store.json are
+// sealed with the key from crypt.go. Both matter: the file is useless without
+// the key, and the key sits in the same owner-only directory unless the
+// operator supplies CREDENTIAL_KEY from elsewhere.
 func Open(dataDir string) (*Store, error) {
 	if err := os.MkdirAll(dataDir, 0o700); err != nil {
+		return nil, err
+	}
+	key, err := loadCredentialKey(dataDir)
+	if err != nil {
 		return nil, err
 	}
 	path := filepath.Join(dataDir, "store.json")
@@ -104,10 +118,24 @@ func Open(dataDir string) (*Store, error) {
 		grants:    map[string]MachineGrant{},
 		audit:     nil,
 		settings:  DefaultAccessSettings(),
+		credKey:   key,
+		auditMax:  DefaultMaxAuditEvents,
 	}
 	if _, err := os.Stat(path); err == nil {
 		if err := s.load(); err != nil {
 			return nil, err
+		}
+		// A store written before credentials were sealed still has plaintext in
+		// it. Rewrite it once, now, rather than leaving it there until the next
+		// unrelated edit happens to touch the file.
+		if s.needsResealing {
+			s.mu.Lock()
+			err := s.saveLocked()
+			s.mu.Unlock()
+			if err != nil {
+				return nil, err
+			}
+			s.needsResealing = false
 		}
 	}
 	return s, nil
@@ -131,7 +159,12 @@ func (s *Store) EnsureBootstrapAdmin(username, password string) error {
 	id, exists := s.byName[username]
 	if exists && s.bootstrapSeed != "" &&
 		bcrypt.CompareHashAndPassword([]byte(s.bootstrapSeed), []byte(password)) == nil {
-		return nil // env unchanged since the last seed — leave the account alone
+		// Env unchanged since the last seed — leave the account alone, but the
+		// ownership migration still has to get its chance on every start.
+		if s.adoptOwnerlessMachinesLocked(id) > 0 {
+			return s.saveLocked()
+		}
+		return nil
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
@@ -143,6 +176,7 @@ func (s *Store) EnsureBootstrapAdmin(username, password string) error {
 		u.PasswordHash = string(hash)
 		u.Role = RoleAdmin
 		s.users[id] = u
+		s.adoptOwnerlessMachinesLocked(u.ID)
 		return s.saveLocked()
 	}
 	u := User{
@@ -154,7 +188,31 @@ func (s *Store) EnsureBootstrapAdmin(username, password string) error {
 	}
 	s.users[u.ID] = u
 	s.byName[u.Username] = u.ID
+	s.adoptOwnerlessMachinesLocked(u.ID)
 	return s.saveLocked()
+}
+
+// adoptOwnerlessMachinesLocked gives the bootstrap admin the machines that
+// predate ownership (D-011). Until this ran, a row with an empty owner was
+// readable by *every* authenticated user — deliberately, so an upgrade did not
+// lose access, but it is not a state to leave a store in. Machines registered
+// after M4 always carry an owner, so on any current store this is a no-op.
+//
+// Caller must hold the write lock and persist afterwards.
+func (s *Store) adoptOwnerlessMachinesLocked(adminID string) int {
+	if adminID == "" {
+		return 0
+	}
+	adopted := 0
+	for id, m := range s.machines {
+		if m.OwnerUserID != "" {
+			continue
+		}
+		m.OwnerUserID = adminID
+		s.machines[id] = m
+		adopted++
+	}
+	return adopted
 }
 
 // ChangePassword rotates a user's own password after proving the current one.
@@ -580,17 +638,38 @@ func (s *Store) AppendAudit(e AuditEvent) error {
 		e.At = time.Now().UTC()
 	}
 	s.audit = append(s.audit, e)
-	if len(s.audit) > maxAuditEvents {
-		s.audit = append([]AuditEvent(nil), s.audit[len(s.audit)-maxAuditEvents:]...)
+	if max := s.auditLimitLocked(); len(s.audit) > max {
+		s.audit = append([]AuditEvent(nil), s.audit[len(s.audit)-max:]...)
 	}
 	return s.saveLocked()
 }
 
-// ListAudit returns newest-first events, optionally capped by limit (0 = default 200).
+// SetAuditLimit changes how many events are retained. Values below 1 restore
+// the default. Trimming takes effect on the next append, not retroactively —
+// shrinking the limit must not throw away history the operator still has.
+func (s *Store) SetAuditLimit(n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if n < 1 {
+		n = DefaultMaxAuditEvents
+	}
+	s.auditMax = n
+}
+
+// auditLimitLocked reads the retention cap. Caller holds the lock.
+func (s *Store) auditLimitLocked() int {
+	if s.auditMax < 1 {
+		return DefaultMaxAuditEvents
+	}
+	return s.auditMax
+}
+
+// ListAudit returns newest-first events. limit 0 means the default page of
+// 200; a negative limit means every retained event (used by export).
 func (s *Store) ListAudit(limit int) []AuditEvent {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if limit <= 0 {
+	if limit == 0 {
 		limit = 200
 	}
 	n := len(s.audit)
@@ -603,7 +682,7 @@ func (s *Store) ListAudit(limit int) []AuditEvent {
 	for i, j := 0, n-1; i < j; i, j = i+1, j-1 {
 		out[i], out[j] = out[j], out[i]
 	}
-	if limit < n {
+	if limit > 0 && limit < n {
 		out = out[:limit]
 	}
 	return out
@@ -773,7 +852,14 @@ func (s *Store) load() error {
 		s.byName[u.Username] = u.ID
 	}
 	for _, m := range snap.Machines {
-		s.machines[m.ID] = m
+		opened, wasPlaintext, err := openMachine(s.credKey, m)
+		if err != nil {
+			return err
+		}
+		if wasPlaintext {
+			s.needsResealing = true
+		}
+		s.machines[opened.ID] = opened
 	}
 	for _, t := range snap.Terminals {
 		s.terminals[t.ID] = t
@@ -808,7 +894,11 @@ func (s *Store) saveLocked() error {
 		snap.Users = append(snap.Users, u)
 	}
 	for _, m := range s.machines {
-		snap.Machines = append(snap.Machines, m)
+		sealed, err := sealMachine(s.credKey, m)
+		if err != nil {
+			return err
+		}
+		snap.Machines = append(snap.Machines, sealed)
 	}
 	for _, t := range s.terminals {
 		snap.Terminals = append(snap.Terminals, t)

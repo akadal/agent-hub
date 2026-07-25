@@ -15,7 +15,7 @@ import (
 // time for snapshot builds:
 //
 //	go build -ldflags "-X github.com/akadal/agent-hub/backend/internal/version.Version=1.1.0-rc1"
-var Version = "1.0.0"
+var Version = "1.1.0"
 
 var (
 	once   sync.Once

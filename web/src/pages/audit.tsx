@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Navigate } from 'react-router'
+import { Download } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
-import { listAudit, type AuditEvent } from '@/lib/api'
+import { exportAuditCsv, listAudit, type AuditEvent } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 
 export function AuditPage() {
@@ -11,6 +12,7 @@ export function AuditPage() {
   const [events, setEvents] = useState<AuditEvent[]>([])
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
+  const [exporting, setExporting] = useState(false)
 
   const refresh = useCallback(async () => {
     if (!token || !isAdmin) return
@@ -29,6 +31,25 @@ export function AuditPage() {
     void refresh()
   }, [refresh])
 
+  async function onExport() {
+    if (!token) return
+    setExporting(true)
+    setError(null)
+    try {
+      const blob = await exportAuditCsv(token)
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = 'agent-hub-audit.csv'
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setExporting(false)
+    }
+  }
+
   if (!isAdmin) {
     return <Navigate to="/" replace />
   }
@@ -40,13 +61,27 @@ export function AuditPage() {
           <h1 className="text-2xl font-semibold tracking-tight">Audit</h1>
           <p className="mt-1 text-sm text-muted-foreground">
             Recent security-relevant actions (login, users, machines, terminals,
-            grants, settings). Newest first; capped server-side. Credentials are
-            never recorded — a password change logs that it changed, not the value.
+            grants, settings). Newest first; the newest 200 are shown and the
+            store keeps {'\u00A0'}
+            <code className="text-foreground">AUDIT_MAX_EVENTS</code> (1000 by
+            default) — export before that rolls over. Credentials are never
+            recorded: a password change logs that it changed, not the value.
           </p>
         </div>
-        <Button variant="outline" size="sm" onClick={() => void refresh()}>
-          Refresh
-        </Button>
+        <div className="flex shrink-0 items-center gap-2">
+          <Button variant="outline" size="sm" onClick={() => void refresh()}>
+            Refresh
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={exporting}
+            onClick={() => void onExport()}
+          >
+            <Download className="size-4" />
+            {exporting ? 'Exporting…' : 'Export CSV'}
+          </Button>
+        </div>
       </div>
 
       {error ? (

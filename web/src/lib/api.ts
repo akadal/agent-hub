@@ -367,6 +367,20 @@ export async function importFromTailscale(
   return (await res.json()) as TailscaleImportResult
 }
 
+/**
+ * Download the full audit log as CSV.
+ *
+ * The endpoint needs the bearer token, so this cannot be a plain link — the
+ * blob is fetched and handed to a synthetic anchor instead.
+ */
+export async function exportAuditCsv(token: string): Promise<Blob> {
+  const res = await fetch(`${API_BASE}/api/audit/export`, {
+    headers: authHeaders(token),
+  })
+  if (!res.ok) throw new Error(await parseError(res))
+  return await res.blob()
+}
+
 export async function deleteMachine(
   token: string,
   id: string,

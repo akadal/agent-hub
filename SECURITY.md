@@ -39,9 +39,12 @@ These are documented trade-offs, tracked in [`docs/debt.md`](docs/debt.md).
 Reports that restate them are welcome as *design* discussion in an issue, but
 they are not undisclosed flaws:
 
-- **SSH passwords and private keys are stored unencrypted** in the data
-  directory (D-009). The bridge needs them to connect. The directory is
-  `0700`; anyone who can read it holds your fleet's credentials.
+- **SSH credentials are encrypted at rest, with a key the process can read.**
+  Passwords, private keys and key passphrases are sealed with AES-256-GCM
+  inside `store.json`, so the store file alone is useless. The bridge has to
+  open them unattended, so the key is reachable by the API: by default it is
+  `credential.key` in the same `0700` data directory. Set `CREDENTIAL_KEY` to
+  keep it elsewhere. Anyone who can read *both* holds your fleet's credentials.
 - **Host keys are pinned trust-on-first-use** (ADR-009). A machine's first
   connect is trusted, later key changes are refused. An attacker already in
   position at registration time is not caught by TOFU.

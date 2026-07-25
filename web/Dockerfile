@@ -2,8 +2,10 @@
 FROM node:22-alpine AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
-# npm install (not ci): lock may omit optional platform packages resolved only on linux
-RUN npm install --no-audit --no-fund
+# npm ci: reproducible, and it fails loudly when the lockfile drifts from
+# package.json. The lockfile must be regenerated on linux (see CONTRIBUTING.md)
+# — one written on macOS omitted linux-only optional packages and broke this.
+RUN npm ci --no-audit --no-fund
 COPY . .
 # Always bake empty API base so Coolify never injects localhost into the SPA.
 # Runtime also strips localhost (see src/lib/api.ts). Same-origin /api via nginx.

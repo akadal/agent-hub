@@ -7,6 +7,60 @@ All notable changes to Agent Hub are recorded here. The format follows
 The running build reports its own version — in the web sidebar, and in
 `GET /health`.
 
+## [1.1.0] — 2026-07-26
+
+### Added
+
+- **Light / dark / system theme.** A three-way appearance switch in the sidebar
+  and Settings. `System` follows the OS and keeps following it. The terminal
+  palette follows the app theme too — the light palette is a darkened ANSI set,
+  because the default one is built for a black background.
+- **Mobile terminal.** On phones the machines/sessions picker moved into a
+  sheet, a session strip (with `+`) is always visible, and the app header
+  collapses to one line on the workspace route. The shell now gets close to the
+  whole screen instead of about ten lines.
+- **Soft keys.** Esc, Tab, a sticky Ctrl, `^C`, `^D`, `^Z`, `^L`, `^R`, arrows
+  and shell punctuation, above the safe area. Sticky Ctrl folds the next key
+  typed on the OS keyboard into its control code, so `Ctrl+R` works on a
+  keyboard that has no Ctrl. On by default for touch input.
+- **Terminal text size** control, per device, in the workspace picker.
+- **Stream view is back.** The readable feed behind the Classic/Stream toggle
+  had been a "Coming soon" placeholder since it froze new sessions. Switching
+  to it seeds from the existing scrollback so the feed is not blank.
+- **Pick-your-machines Tailscale import.** The device list is now a checklist
+  instead of "import everything online", an offline device you tick is honoured,
+  and credentials are opt-in — a tailnet host on port 22 is authorised by
+  Tailscale ACL and ignores anything stored here.
+- **Audit export.** `GET /audit/export` and an Export CSV button return every
+  retained event. Cells that start `=`, `+`, `-` or `@` are escaped so a crafted
+  username cannot run as a formula in a spreadsheet.
+- **`AUDIT_MAX_EVENTS`** to raise or lower how much audit history is kept.
+- **`CREDENTIAL_KEY`** to supply the credential encryption key from outside the
+  data directory.
+
+### Changed
+
+- **SSH credentials are encrypted at rest.** Passwords, private keys and key
+  passphrases are sealed with AES-256-GCM before they reach `store.json`. The
+  key comes from `CREDENTIAL_KEY`, or from a `credential.key` file generated in
+  the data directory on first start. Existing plaintext stores are read and
+  re-sealed automatically. (D-009)
+- **Machines registered before ownership existed** are adopted by the bootstrap
+  admin on startup. They used to be readable by every account. (D-011)
+- The web image and CI install with `npm ci`. The lockfile was regenerated on
+  linux so it no longer omits linux-only optional packages. (D-002)
+
+### Fixed
+
+- The stream reader no longer grows one unbounded string when a program prints
+  megabytes without a newline, and drops a truncated escape sequence instead of
+  re-parsing it into every following chunk. This is what froze new sessions and
+  got the view disabled in the first place.
+- tmux's status bar no longer collects in the stream reader once a minute as
+  its clock ticks.
+- Soft keys fire on `pointerdown`, so they work on touch devices — preventing
+  the default on `touchstart` also cancels the click that used to trigger them.
+
 ## [1.0.0] — 2026-07-25
 
 First release. Everything below works end to end against the Compose stack and
@@ -70,7 +124,9 @@ against real SSH hosts.
 ### Known gaps
 
 Tracked openly in [`docs/debt.md`](docs/debt.md): SSH credentials are stored
-unencrypted in the data directory, the network policy setting records intent
-rather than enforcing it, and Tailscale identity login is not implemented.
+unencrypted in the data directory (fixed in 1.1.0), the network policy setting
+records intent rather than enforcing it, and Tailscale identity login is not
+implemented.
 
+[1.1.0]: https://github.com/akadal/agent-hub/releases/tag/v1.1.0
 [1.0.0]: https://github.com/akadal/agent-hub/releases/tag/v1.0.0

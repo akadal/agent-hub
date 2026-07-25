@@ -27,6 +27,8 @@ type Config struct {
 	// Optional Tailscale API for one-shot machine import (no daemon required).
 	TailscaleAPIKey  string
 	TailscaleTailnet string // empty or "-" = key owner's default tailnet
+	// AuditMaxEvents is how many audit rows the file store keeps. 0 = default.
+	AuditMaxEvents int
 }
 
 // Load reads configuration from environment variables with safe local defaults.
@@ -70,6 +72,12 @@ func Load() Config {
 	if v := os.Getenv("ACCESS_DEFAULT_TAILSCALE_ONLY"); v != "" {
 		tailscaleOnly, _ = strconv.ParseBool(v)
 	}
+	auditMax := 0
+	if v := strings.TrimSpace(os.Getenv("AUDIT_MAX_EVENTS")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			auditMax = n
+		}
+	}
 	tsKey := strings.TrimSpace(os.Getenv("TAILSCALE_API_KEY"))
 	tsNet := strings.TrimSpace(os.Getenv("TAILSCALE_TAILNET"))
 	if tsNet == "" {
@@ -85,5 +93,6 @@ func Load() Config {
 		AccessDefaultTailscaleOnly: tailscaleOnly,
 		TailscaleAPIKey:            tsKey,
 		TailscaleTailnet:           tsNet,
+		AuditMaxEvents:             auditMax,
 	}
 }

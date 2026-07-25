@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/csv"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -92,6 +93,9 @@ func (s *Server) NewMux() http.Handler {
 
 	// Audit (admin list; writes happen on security-relevant actions)
 	mount("GET", "/audit", s.requireAuth(s.requireAdmin(s.handleListAudit)))
+	// Export exists because the log is a ring buffer: without a way to take a
+	// copy, retention is the only policy an operator has (D-005, D-013).
+	mount("GET", "/audit/export", s.requireAuth(s.requireAdmin(s.handleExportAudit)))
 
 	// Access policy settings
 	mount("GET", "/settings", s.requireAuth(s.handleGetSettings))
@@ -1068,6 +1072,52 @@ func (s *Server) handleDeleteGrant(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleListAudit(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"events": s.Store.ListAudit(200)})
+}
+
+// handleExportAudit streams every retained event as CSV, newest first.
+//
+// Excel and most spreadsheets treat a leading =, +, - or @ as a formula, so a
+// crafted username could execute on the reviewer's machine. Prefixing those
+// cells with an apostrophe is the standard defence and keeps the value legible.
+func (s *Server) handleExportAudit(w http.ResponseWriter, r *http.Request) {
+	events := s.Store.ListAudit(-1)
+
+	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+	w.Header().Set("Content-Disposition", `attachment; filename="agent-hub-audit.csv"`)
+	w.WriteHeader(http.StatusOK)
+
+	cw := csv.NewWriter(w)
+	_ = cw.Write([]string{"at", "user_id", "username", "action", "machine_id", "terminal_id", "detail"})
+	for _, e := range events {
+		at := ""
+		if !e.At.IsZero() {
+			at = e.At.UTC().Format(time.RFC3339)
+		}
+		_ = cw.Write([]string{
+			at,
+			csvCell(e.UserID),
+			csvCell(e.Username),
+			csvCell(e.Action),
+			csvCell(e.MachineID),
+			csvCell(e.TerminalID),
+			csvCell(e.Detail),
+		})
+	}
+	cw.Flush()
+
+	s.audit(r, "audit.export", "", "", fmt.Sprintf("%d event(s)", len(events)))
+}
+
+// csvCell defuses spreadsheet formula injection without mangling ordinary text.
+func csvCell(v string) string {
+	if v == "" {
+		return v
+	}
+	switch v[0] {
+	case '=', '+', '-', '@', '\t', '\r':
+		return "'" + v
+	}
+	return v
 }
 
 func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {

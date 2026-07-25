@@ -24,6 +24,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("open store: %v", err)
 	}
+	if cfg.AuditMaxEvents > 0 {
+		st.SetAuditLimit(cfg.AuditMaxEvents)
+	}
 	if err := st.EnsureBootstrapAdmin(cfg.BootstrapAdminUsername, cfg.BootstrapAdminPassword); err != nil {
 		log.Fatalf("bootstrap admin: %v", err)
 	}
