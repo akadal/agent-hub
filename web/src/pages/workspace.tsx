@@ -14,10 +14,6 @@ import {
 } from 'lucide-react'
 import '@xterm/xterm/css/xterm.css'
 
-import {
-  TerminalChatView,
-  type ChatFeedItem,
-} from '@/components/terminal-chat-view'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Separator } from '@/components/ui/separator'
@@ -31,13 +27,6 @@ import {
   type TerminalSession,
 } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
-import {
-  createStreamFeed,
-  feedAddUser,
-  feedPush,
-  feedSnapshot,
-  type StreamFeed,
-} from '@/lib/stream-blocks'
 import {
   getTerminalViewMode,
   setTerminalViewMode,
@@ -76,12 +65,19 @@ export function WorkspacePage() {
    */
   const [mountedSessionIds, setMountedSessionIds] = useState<string[]>([])
   /**
-   * Global display mode (classic xterm vs chat/stream). Shared by all sessions;
-   * persisted in localStorage — not per-session.
+   * Global display mode (classic xterm vs stream placeholder). Shared by all
+   * sessions; persisted in localStorage — not per-session.
+   * Stream feed is temporarily disabled (Coming soon) — no PTY text parsing.
+   * Prefer classic so a saved "chat" pref does not hide the TTY on load.
    */
-  const [viewMode, setViewMode] = useState<TerminalViewMode>(() =>
-    getTerminalViewMode(),
-  )
+  const [viewMode, setViewMode] = useState<TerminalViewMode>(() => {
+    const stored = getTerminalViewMode()
+    if (stored === 'chat') {
+      setTerminalViewMode('classic')
+      return 'classic'
+    }
+    return stored
+  })
   /**
    * Mobile: collapse machines/sessions picker so the terminal/stream
    * gets the full viewport (biggest smoothness + UX win on phone).
@@ -524,12 +520,12 @@ export function WorkspacePage() {
               title={
                 viewMode === 'chat'
                   ? 'Switch to classic terminal'
-                  : 'Switch to stream / chat view'
+                  : 'Stream view (coming soon)'
               }
               aria-label={
                 viewMode === 'chat'
                   ? 'Switch to classic terminal'
-                  : 'Switch to stream view'
+                  : 'Stream view (coming soon)'
               }
               aria-pressed={viewMode === 'chat'}
               className="touch-manipulation max-md:size-9"
@@ -701,8 +697,8 @@ export function WorkspacePage() {
                     : 'text-neutral-500',
                 )}
               >
-                Tip: Stream view for readable mobile feeds; Classic for full
-                TTY. Preference applies to every session.
+                Tip: use Classic terminal for the full TTY. Stream view is
+                coming soon.
               </p>
             </div>
           )}
@@ -753,106 +749,16 @@ function SessionTerminal({
   activeRef.current = active
   viewModeRef.current = viewMode
 
-  /**
-   * Incremental stream feed lives in a ref (cheap). React state only holds a
-   * generation counter so we can throttle UI updates — and only while chat
-   * mode is visible. Classic mode never pays setState for PTY volume.
-   */
-  const feedRef = useRef<StreamFeed | null>(null)
-  if (!feedRef.current) feedRef.current = createStreamFeed()
-  const feedRafRef = useRef(0)
-  const [feedGen, setFeedGen] = useState(0)
-  const [liveStatus, setLiveStatus] = useState('idle')
-
-  const scheduleFeedUi = useCallback(() => {
-    if (viewModeRef.current !== 'chat') return
-    if (feedRafRef.current) return
-    // Coalesce bursts: at most ~10 UI commits/sec while PTY is streaming.
-    // Keeps mobile scroll smooth; sealed history stays in a ref until paint.
-    feedRafRef.current = window.setTimeout(() => {
-      feedRafRef.current = 0
-      requestAnimationFrame(() => {
-        const g = feedRef.current?.gen ?? 0
-        setFeedGen((prev) => (prev === g ? prev : g))
-      })
-    }, 100)
-  }, [])
-
   const setStatus = useCallback((s: string) => {
     statusRef.current = s
-    setLiveStatus(s)
     onStatusRef.current(s)
-  }, [])
-
-  /** Line-edit + classify PTY bytes; never re-parses full history. */
-  const pushStreamText = useCallback(
-    (chunk: string) => {
-      const feed = feedRef.current
-      if (!feed) return
-      const changed = feedPush(feed, chunk)
-      if (changed) scheduleFeedUi()
-    },
-    [scheduleFeedUi],
-  )
-
-  const sendStdin = useCallback((data: string) => {
-    const ws = wsRef.current
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: 'stdin', data }))
-    }
-  }, [])
-
-  const onChatSend = useCallback(
-    (text: string) => {
-      const feed = feedRef.current
-      if (feed) {
-        feedAddUser(feed, text)
-        scheduleFeedUi()
-      }
-      // Line-oriented submit; Enter for most shells / agent CLIs.
-      sendStdin(text.endsWith('\n') || text.endsWith('\r') ? text : `${text}\r`)
-    },
-    [sendStdin, scheduleFeedUi],
-  )
-
-  // Snapshot only when feedGen changes or mode switches to chat.
-  const chatFeedItems = useMemo((): ChatFeedItem[] => {
-    if (viewMode !== 'chat') return []
-    const feed = feedRef.current
-    if (!feed) return []
-    void feedGen
-    const blocks = feedSnapshot(feed)
-    const items: ChatFeedItem[] = []
-    for (const b of blocks) {
-      if (b.kind === 'user') {
-        items.push({ type: 'user', id: b.id, text: b.text })
-      } else {
-        items.push({ type: 'block', id: b.id, block: b })
-      }
-    }
-    return items
-  }, [feedGen, viewMode])
-
-  // Entering chat: flush one paint from the ref without waiting for more PTY.
-  useEffect(() => {
-    if (viewMode !== 'chat') return
-    setFeedGen(feedRef.current?.gen ?? 0)
-  }, [viewMode])
-
-  useEffect(() => {
-    return () => {
-      if (feedRafRef.current) {
-        window.clearTimeout(feedRafRef.current)
-        feedRafRef.current = 0
-      }
-    }
   }, [])
 
   /**
    * Fit the terminal to its host and notify PTY only when cols/rows change.
    * Debounced by default — continuous visualViewport noise was causing
    * mobile fullscreen thrash (text redraw / “echo” look).
-   * In chat mode we still keep a reasonable cols/rows for the remote PTY.
+   * Stream placeholder mode keeps a fixed cols/rows for the remote PTY.
    */
   const fitAndNotify = useCallback((opts?: { immediate?: boolean }) => {
     const run = () => {
@@ -926,7 +832,6 @@ function SessionTerminal({
   // xterm mounts once; WebSocket auto-reconnects (mobile Safari/Chrome kill
   // idle sockets when the screen locks or the tab is backgrounded).
   // Server tmux session is durable — reconnect reattaches the same shell.
-  // Chat view is a second presentation of the same stream — no second channel.
   useEffect(() => {
     if (!containerRef.current) return
 
@@ -983,16 +888,6 @@ function SessionTerminal({
           /* ignore */
         }
       }
-    }
-
-    const writeBoth = (data: string) => {
-      term.write(data)
-      pushStreamText(data)
-    }
-
-    const writelnBoth = (line: string) => {
-      term.writeln(line)
-      pushStreamText(`${line}\n`)
     }
 
     const connect = () => {
@@ -1059,7 +954,7 @@ function SessionTerminal({
         reconnectAttempt += 1
         setStatus('reconnecting…')
         if (hadReady) {
-          writelnBoth(
+          term.writeln(
             `\x1b[33m[connection lost — reconnecting in ${Math.round(delay / 1000)}s…]\x1b[0m`,
           )
         }
@@ -1076,21 +971,22 @@ function SessionTerminal({
             data?: string
             message?: string
           }
-          if (msg.type === 'stdout' && msg.data) writeBoth(msg.data)
+          // Classic xterm only — stream feed parsing is disabled (coming soon).
+          if (msg.type === 'stdout' && msg.data) term.write(msg.data)
           else if (msg.type === 'error') {
             setStatus('error')
-            writelnBoth(`\x1b[31m${msg.message}\x1b[0m`)
+            term.writeln(`\x1b[31m${msg.message}\x1b[0m`)
           } else if (msg.type === 'ready') {
             const resume = hadReady
             hadReady = true
             setStatus('ssh ready')
             if (resume) {
-              writelnBoth('\x1b[32m[reconnected — same tmux session]\x1b[0m')
+              term.writeln('\x1b[32m[reconnected — same tmux session]\x1b[0m')
             }
           }
           // pong ignored
         } catch {
-          writeBoth(String(ev.data))
+          term.write(String(ev.data))
         }
       }
     }
@@ -1213,7 +1109,7 @@ function SessionTerminal({
     <div className="relative h-full w-full">
       {/*
         Keep xterm mounted always so scrollback + WS stay alive when toggling.
-        Chat mode parks it off-screen (still receives writes).
+        Stream mode parks it off-screen (still receives writes, no feed parse).
       */}
       <div
         ref={containerRef}
@@ -1230,14 +1126,22 @@ function SessionTerminal({
         }}
       />
       {isChat ? (
-        <TerminalChatView
-          items={chatFeedItems}
-          status={liveStatus}
-          active={active}
-          disabled={!active || liveStatus === 'connecting…'}
-          onSend={onChatSend}
-          className="absolute inset-0"
-        />
+        <div
+          className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-background p-8 text-center"
+          role="status"
+        >
+          <MessageSquareText className="size-10 text-muted-foreground/50" />
+          <div className="space-y-1">
+            <p className="text-base font-medium text-foreground">
+              Stream view
+            </p>
+            <p className="text-sm text-muted-foreground">Coming soon</p>
+          </div>
+          <p className="max-w-xs text-xs text-muted-foreground/80">
+            Readable mobile feed is temporarily disabled. Switch to Classic for
+            the full terminal.
+          </p>
+        </div>
       ) : null}
     </div>
   )
