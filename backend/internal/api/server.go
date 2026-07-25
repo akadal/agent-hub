@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -912,6 +913,16 @@ const (
 func (s *Server) bridgeSSH(w http.ResponseWriter, r *http.Request, m store.Machine, remoteSession, label string) {
 	cols := 80
 	rows := 24
+	if c := r.URL.Query().Get("cols"); c != "" {
+		if n, err := strconv.Atoi(c); err == nil && n > 0 {
+			cols = n
+		}
+	}
+	if rw := r.URL.Query().Get("rows"); rw != "" {
+		if n, err := strconv.Atoi(rw); err == nil && n > 0 {
+			rows = n
+		}
+	}
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		s.logf("ws upgrade: %v", err)
@@ -943,6 +954,16 @@ func (s *Server) bridgeSSH(w http.ResponseWriter, r *http.Request, m store.Machi
 		return nil
 	})
 
+	// Tell the client we are past WS upgrade and about to dial SSH — otherwise
+	// the UI sits on "connected" with a black xterm and no prompt for the full
+	// dial timeout (looks like a dead session).
+	target := fmt.Sprintf("%s@%s:%d", m.SSHUser, m.Address, m.Port)
+	_ = writeMsg(wsServerMsg{
+		Type:    "status",
+		Message: "opening ssh to " + target + "…",
+	})
+
+	openStart := time.Now()
 	sess, err := sshterm.OpenSession(sshterm.Target{
 		Address:  m.Address,
 		Port:     m.Port,
@@ -950,10 +971,12 @@ func (s *Server) bridgeSSH(w http.ResponseWriter, r *http.Request, m store.Machi
 		Password: m.SSHPassword,
 	}, remoteSession, cols, rows)
 	if err != nil {
+		s.logf("bridgeSSH open failed %s after %s: %v", target, time.Since(openStart).Round(time.Millisecond), err)
 		_ = writeMsg(wsServerMsg{Type: "error", Message: "ssh open failed: " + err.Error()})
 		return
 	}
 	defer sess.Close()
+	s.logf("bridgeSSH open ok %s in %s (%s)", target, time.Since(openStart).Round(time.Millisecond), label)
 
 	msg := "ssh session open (" + label + ")"
 	if remoteSession != "" {

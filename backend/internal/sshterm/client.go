@@ -23,6 +23,11 @@ type Target struct {
 // dialTimeout is only for the initial TCP connect, not session lifetime.
 const dialTimeout = 15 * time.Second
 
+// openTimeout caps the whole OpenSession path (dial + auth + pty + shell start).
+// Without this, a hung Tailscale/sshd handshake leaves the browser on a black
+// xterm forever showing only "connected" (WS up, no ready/stdout).
+const openTimeout = 20 * time.Second
+
 // keepaliveInterval sends SSH-level keepalives so idle shells are not dropped.
 const keepaliveInterval = 30 * time.Second
 
@@ -117,7 +122,36 @@ type Session struct {
 // OpenSession starts an interactive shell with a PTY and keepalives.
 // If remoteSession is non-empty, attaches/creates a tmux session of that name
 // so reconnects (other device/tab) resume the same shell.
+//
+// The whole open path is bounded by openTimeout so a hung remote never leaves
+// the WebSocket bridge stuck before the first "ready" frame.
 func OpenSession(t Target, remoteSession string, cols, rows int) (*Session, error) {
+	type result struct {
+		s   *Session
+		err error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		s, err := openSession(t, remoteSession, cols, rows)
+		ch <- result{s, err}
+	}()
+	select {
+	case r := <-ch:
+		return r.s, r.err
+	case <-time.After(openTimeout):
+		// Best-effort: if openSession finishes later it will close itself only
+		// when the caller drops the result — race the late success path.
+		go func() {
+			if r := <-ch; r.s != nil {
+				_ = r.s.Close()
+			}
+		}()
+		return nil, fmt.Errorf("ssh open timed out after %s (host %s:%d user %s)",
+			openTimeout, t.Address, t.Port, t.User)
+	}
+}
+
+func openSession(t Target, remoteSession string, cols, rows int) (*Session, error) {
 	if cols <= 0 {
 		cols = 80
 	}
@@ -140,6 +174,7 @@ func OpenSession(t Target, remoteSession string, cols, rows int) (*Session, erro
 		ssh.TTY_OP_ISPEED: 14400,
 		ssh.TTY_OP_OSPEED: 14400,
 	}
+	// RequestPty(term, height, width, modes) — note h,w order.
 	if err := sess.RequestPty("xterm-256color", rows, cols, modes); err != nil {
 		sess.Close()
 		client.Close()
@@ -149,6 +184,7 @@ func OpenSession(t Target, remoteSession string, cols, rows int) (*Session, erro
 	_ = sess.Setenv("LANG", "C.UTF-8")
 	_ = sess.Setenv("LC_ALL", "C.UTF-8")
 	_ = sess.Setenv("LC_CTYPE", "C.UTF-8")
+	_ = sess.Setenv("TERM", "xterm-256color")
 
 	stdin, err := sess.StdinPipe()
 	if err != nil {
@@ -251,10 +287,14 @@ func KillRemoteSession(t Target, remoteSession string) error {
 // even when `brew install tmux` succeeded in a local Terminal window.
 func remoteShellCmd(remoteSession string) string {
 	// Force UTF-8 so Turkish and other multi-byte chars survive (C/POSIX locales mangle them).
+	// -i forces interactive (prompt + rc files) even when SSH runs a command string
+	// instead of a pure login shell — avoids a black PTY with only a cursor.
 	const prefix = `export LANG="${LANG:-C.UTF-8}" LC_ALL="${LC_ALL:-C.UTF-8}" LC_CTYPE="${LC_CTYPE:-C.UTF-8}"; ` +
+		`export TERM="${TERM:-xterm-256color}"; ` +
 		`export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"; `
+	const shell = `exec ${SHELL:-/bin/bash} -il`
 	if remoteSession == "" || !safeSessionName.MatchString(remoteSession) {
-		return prefix + `exec ${SHELL:-/bin/bash} -l`
+		return prefix + shell
 	}
 	// Resolve tmux without printing "command not found" into the PTY.
 	return prefix + fmt.Sprintf(
@@ -262,7 +302,7 @@ func remoteShellCmd(remoteSession string) string {
 			`if [ -z "$TMUX_BIN" ] && [ -x /opt/homebrew/bin/tmux ]; then TMUX_BIN=/opt/homebrew/bin/tmux; fi; `+
 			`if [ -z "$TMUX_BIN" ] && [ -x /usr/local/bin/tmux ]; then TMUX_BIN=/usr/local/bin/tmux; fi; `+
 			`if [ -n "$TMUX_BIN" ]; then exec "$TMUX_BIN" -u new-session -A -s %s; fi; `+
-			`exec ${SHELL:-/bin/bash} -l`,
+			shell,
 		remoteSession,
 	)
 }

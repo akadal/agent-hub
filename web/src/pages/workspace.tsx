@@ -877,6 +877,9 @@ function SessionTerminal({
     let reconnectAttempt = 0
     let hadReady = false
     let pingTimer = 0
+    let pokeTimer = 0
+    let sawStdout = false
+    let openWatchTimer = 0
 
     const clearReconnect = () => {
       window.clearTimeout(reconnectTimer)
@@ -886,6 +889,16 @@ function SessionTerminal({
     const clearPing = () => {
       window.clearInterval(pingTimer)
       pingTimer = 0
+    }
+
+    const clearPoke = () => {
+      window.clearTimeout(pokeTimer)
+      pokeTimer = 0
+    }
+
+    const clearOpenWatch = () => {
+      window.clearTimeout(openWatchTimer)
+      openWatchTimer = 0
     }
 
     const sendAppPing = () => {
@@ -903,6 +916,9 @@ function SessionTerminal({
       if (disposed) return
       clearReconnect()
       clearPing()
+      clearPoke()
+      clearOpenWatch()
+      sawStdout = false
 
       const gen = ++socketGen
       // Drop previous socket without triggering its reconnect path.
@@ -921,6 +937,12 @@ function SessionTerminal({
       }
 
       setStatus(hadReady ? 'reconnecting…' : 'connecting…')
+      // Fit before first frame so PTY size is sane (not 0×0).
+      try {
+        fit.fit()
+      } catch {
+        /* ignore */
+      }
       const ws = new WebSocket(sessionWsUrl(sessionId, token))
       currentWs = ws
       wsRef.current = ws
@@ -928,13 +950,16 @@ function SessionTerminal({
       ws.onopen = () => {
         if (disposed || gen !== socketGen) return
         reconnectAttempt = 0
-        setStatus('connected')
+        // WS is up — SSH dial still in flight on the API. Do not say "connected"
+        // (users read that as "shell ready" and stare at a black cursor).
+        setStatus('opening ssh…')
+        term.writeln('\x1b[90m[ws connected — opening remote shell…]\x1b[0m')
         try {
           ws.send(
             JSON.stringify({
               type: 'resize',
-              cols: term.cols,
-              rows: term.rows,
+              cols: Math.max(term.cols, 2),
+              rows: Math.max(term.rows, 1),
             }),
           )
         } catch {
@@ -944,6 +969,15 @@ function SessionTerminal({
         // Mobile throttles timers when backgrounded; server protocol pings still run.
         pingTimer = window.setInterval(sendAppPing, 20_000)
         sendAppPing()
+        // If the API never sends ready/error (hung SSH), surface it instead of
+        // infinite black screen with a blinking cursor.
+        openWatchTimer = window.setTimeout(() => {
+          if (disposed || gen !== socketGen || hadReady) return
+          setStatus('error')
+          term.writeln(
+            '\x1b[31m[ssh open timed out — no shell from server. Check machine SSH/Tailscale, then New session.]\x1b[0m',
+          )
+        }, 25_000)
       }
 
       ws.onerror = () => {
@@ -955,6 +989,8 @@ function SessionTerminal({
       ws.onclose = () => {
         if (disposed || gen !== socketGen) return
         clearPing()
+        clearPoke()
+        clearOpenWatch()
         wsRef.current = null
         if (currentWs === ws) currentWs = null
 
@@ -981,17 +1017,46 @@ function SessionTerminal({
             message?: string
           }
           // Classic xterm only — stream feed parsing is disabled (coming soon).
-          if (msg.type === 'stdout' && msg.data) term.write(msg.data)
-          else if (msg.type === 'error') {
+          if (msg.type === 'stdout' && msg.data) {
+            sawStdout = true
+            clearPoke()
+            term.write(msg.data)
+          } else if (msg.type === 'error') {
+            clearOpenWatch()
+            clearPoke()
             setStatus('error')
-            term.writeln(`\x1b[31m${msg.message}\x1b[0m`)
+            term.writeln(`\x1b[31m${msg.message ?? 'ssh error'}\x1b[0m`)
+          } else if (msg.type === 'status' && msg.message) {
+            setStatus('opening ssh…')
+            term.writeln(`\x1b[90m[${msg.message}]\x1b[0m`)
           } else if (msg.type === 'ready') {
+            clearOpenWatch()
             const resume = hadReady
             hadReady = true
             setStatus('ssh ready')
             if (resume) {
               term.writeln('\x1b[32m[reconnected — same tmux session]\x1b[0m')
+            } else {
+              term.writeln(`\x1b[90m[${msg.message ?? 'ssh ready'}]\x1b[0m`)
             }
+            // Some hosts (or empty tmux panes) open a PTY but never paint a
+            // prompt. Nudge with Enter once so the user is not stuck on a
+            // black screen with only a blinking cursor.
+            clearPoke()
+            pokeTimer = window.setTimeout(() => {
+              if (disposed || gen !== socketGen || sawStdout) return
+              const sock = currentWs
+              if (sock && sock.readyState === WebSocket.OPEN) {
+                term.writeln(
+                  '\x1b[33m[no shell output yet — sending Enter…]\x1b[0m',
+                )
+                try {
+                  sock.send(JSON.stringify({ type: 'stdin', data: '\r' }))
+                } catch {
+                  /* ignore */
+                }
+              }
+            }, 1500)
           }
           // pong ignored
         } catch {
@@ -1056,6 +1121,8 @@ function SessionTerminal({
       socketGen += 1 // invalidate in-flight handlers
       clearReconnect()
       clearPing()
+      clearPoke()
+      clearOpenWatch()
       window.clearTimeout(fitTimerRef.current)
       window.removeEventListener('resize', onWindowResize)
       vv?.removeEventListener('resize', onWindowResize)
