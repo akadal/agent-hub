@@ -44,7 +44,7 @@ const FeedRow = memo(function FeedRow({
         className="flex justify-end py-1.5"
         style={{ contentVisibility: 'auto', containIntrinsicSize: '0 48px' }}
       >
-        <div className="max-w-[88%] rounded-2xl bg-neutral-900 px-3.5 py-2 text-[15px] leading-snug text-white">
+        <div className="max-w-[88%] rounded-2xl bg-primary px-3.5 py-2 text-[15px] leading-snug text-primary-foreground">
           <pre className="whitespace-pre-wrap break-words font-sans">
             {item.text}
           </pre>
@@ -68,7 +68,7 @@ const FeedRow = memo(function FeedRow({
           type="button"
           className={cn(
             'flex w-full max-w-full items-center gap-1.5 rounded-lg py-1.5 text-left text-[12px]',
-            'text-neutral-500 touch-manipulation hover:text-neutral-700',
+            'text-muted-foreground touch-manipulation hover:text-foreground',
           )}
           aria-expanded={!isCollapsed}
           aria-controls={panelId}
@@ -81,7 +81,7 @@ const FeedRow = memo(function FeedRow({
           )}
           <span className="font-medium">Thinking</span>
           {isCollapsed ? (
-            <span className="min-w-0 truncate font-normal text-neutral-400">
+            <span className="min-w-0 truncate font-normal text-muted-foreground/80">
               {b.text.replace(/\s+/g, ' ').slice(0, 64)}
               {b.text.length > 64 ? '…' : ''}
             </span>
@@ -90,7 +90,7 @@ const FeedRow = memo(function FeedRow({
         {!isCollapsed ? (
           <pre
             id={panelId}
-            className="mt-1 whitespace-pre-wrap break-words border-l-2 border-neutral-200 pl-3 font-mono text-[12px] leading-relaxed text-neutral-500"
+            className="mt-1 whitespace-pre-wrap break-words border-l-2 border-border pl-3 font-mono text-[12px] leading-relaxed text-muted-foreground"
           >
             {b.text}
           </pre>
@@ -105,7 +105,7 @@ const FeedRow = memo(function FeedRow({
         className="py-1"
         style={{ contentVisibility: 'auto', containIntrinsicSize: '0 28px' }}
       >
-        <pre className="whitespace-pre-wrap break-words font-mono text-[13px] leading-relaxed text-violet-700">
+        <pre className="whitespace-pre-wrap break-words font-mono text-[13px] leading-relaxed text-violet-700 dark:text-violet-300">
           {b.text}
         </pre>
       </div>
@@ -114,7 +114,7 @@ const FeedRow = memo(function FeedRow({
 
   if (b.kind === 'system') {
     return (
-      <div className="py-1 text-center text-[11px] text-neutral-400">
+      <div className="py-1 text-center text-[11px] text-muted-foreground/70">
         {b.text}
       </div>
     )
@@ -125,7 +125,7 @@ const FeedRow = memo(function FeedRow({
       className="py-1"
       style={{ contentVisibility: 'auto', containIntrinsicSize: '0 80px' }}
     >
-      <pre className="whitespace-pre-wrap break-words font-mono text-[13px] leading-[1.5] text-neutral-800">
+      <pre className="whitespace-pre-wrap break-words font-mono text-[13px] leading-[1.5] text-foreground/90">
         {b.text}
       </pre>
     </div>
@@ -208,7 +208,7 @@ export function TerminalChatView({
   return (
     <div
       className={cn(
-        'flex h-full min-h-0 w-full flex-col bg-[#f7f7f8] text-neutral-900',
+        'flex h-full min-h-0 w-full flex-col bg-background text-foreground',
         className,
       )}
     >
@@ -226,13 +226,13 @@ export function TerminalChatView({
       >
         <div className="mx-auto flex w-full max-w-xl flex-col">
           {empty ? (
-            <div className="flex flex-col items-center gap-2 py-16 text-center text-sm text-neutral-400">
+            <div className="flex flex-col items-center gap-2 py-16 text-center text-sm text-muted-foreground">
               <p className="max-w-[16rem] leading-relaxed">
                 Lite shell reader — prompts, ANSI, echoes and repeats are
                 filtered. Type below to send.
               </p>
               {status ? (
-                <p className="font-mono text-[11px] text-neutral-400">
+                <p className="font-mono text-[11px] text-muted-foreground/80">
                   {status}
                 </p>
               ) : null}
@@ -254,8 +254,8 @@ export function TerminalChatView({
       <form
         onSubmit={onForm}
         className={cn(
-          'shrink-0 border-t border-neutral-200/90 bg-[#f7f7f8]/95 px-3 py-2',
-          'backdrop-blur supports-[backdrop-filter]:bg-[#f7f7f8]/90',
+          'shrink-0 border-t border-border bg-card/95 px-3 py-2',
+          'backdrop-blur supports-[backdrop-filter]:bg-card/85',
           'pb-[max(0.5rem,env(safe-area-inset-bottom))]',
         )}
       >
@@ -273,10 +273,10 @@ export function TerminalChatView({
             onKeyDown={onKeyDown}
             placeholder="Message the shell…"
             className={cn(
-              'max-h-28 min-h-11 flex-1 resize-none rounded-2xl border border-neutral-200',
-              'bg-white px-3.5 py-2.5 text-base leading-snug text-neutral-900',
-              'placeholder:text-neutral-400',
-              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-300',
+              'max-h-28 min-h-11 flex-1 resize-none rounded-2xl border border-input',
+              'bg-background px-3.5 py-2.5 text-base leading-snug text-foreground',
+              'placeholder:text-muted-foreground',
+              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
               'disabled:opacity-50 sm:min-h-10 sm:text-sm',
             )}
           />

@@ -126,6 +126,30 @@ Lightweight log of decisions that affect structure. Full product requirements st
 
 ---
 
+## ADR-011: The phone is a first-class terminal, not a shrunk desktop
+
+| Field | Value |
+|-------|--------|
+| Status | accepted |
+| Date | 2026-07-26 |
+| Context | The workspace laid out the same two panes at every width. On a handset the machines/sessions picker took roughly a third of the viewport and the app header another 110px, leaving a shell about ten lines tall — and the picker had to be reopened to switch sessions, covering the very thing you were switching to. Worse, the soft keyboard on iOS and Android has no Esc, no Tab, no Ctrl and no arrow keys, so `vim`, tab completion, `^C` and command history were simply unreachable from a phone. A terminal product that cannot interrupt a runaway process on the device its users carry is not usable there. |
+| Decision | Below `md` the picker becomes a **sheet** instead of a pane, an always-visible **session strip** (with a `+`) handles switching, the app header collapses to one line on the workspace route, and a **soft-key bar** sits above the safe area with Esc, Tab, a sticky Ctrl, `^C`, arrows and the punctuation a shell needs. The bar is on by default for coarse pointers and can be turned off. Sticky Ctrl folds the *next* character typed on the OS keyboard into its control code, so `Ctrl+R` works without a Ctrl key existing. Key presses are handled on `pointerdown` with `preventDefault`, because that is what keeps focus — and therefore the keyboard — in the terminal; `onClick` is kept only for keyboard activation (`detail === 0`), since preventing the default on touch also cancels the synthetic click. Terminal text size is a per-device preference in the picker, not a global setting. |
+| Consequences | The shell gets essentially the whole phone screen and every ordinary shell key is reachable. The desktop layout is untouched: the picker column, header and controls render exactly as before at `md` and above. The cost is two presentations of the same picker — mitigated by rendering one component in both places so they cannot drift — and a soft-key set that is a judgement call rather than a complete keyboard; it covers what a shell session actually needs and scrolls for the rest. |
+
+---
+
+## ADR-012: One theme for the app and the terminal, with a system option
+
+| Field | Value |
+|-------|--------|
+| Status | accepted |
+| Date | 2026-07-26 |
+| Context | The CSS variables for a dark theme had been in `index.css` since the shell was scaffolded, but nothing ever set the `.dark` class, so the app was permanently light while the terminal was hard-coded to a black background — the two halves of the same screen disagreed. There was also no way to ask for either. |
+| Decision | A three-way preference — **light, dark, system** — stored in `localStorage` as the *preference*, never the resolved value, so a machine that switches at sunset follows it. `system` tracks `prefers-color-scheme` live. The resolved theme is applied as `.dark` plus `color-scheme` on the document element, and an inline script in `index.html` applies it before the bundle runs so a dark-theme user never sees a white flash. The **xterm palette follows the app theme**: the light palette is a darkened ANSI set (GitHub-light derived) rather than the default one, because the default is tuned for a black background and bright yellow on white is unreadable. Green is deliberately kept mid-tone rather than dark: tmux paints its status bar green with black text, so green has to survive being a background as well as a foreground. |
+| Consequences | The whole surface, terminal included, is one theme. The cost is a second palette to maintain and a light-mode compromise that no ANSI palette avoids — a colour cannot be maximally legible both on white and behind black text. `theme-pref.ts` holds the pure logic (read, resolve, apply) so the behaviour is unit-tested without a DOM, and the React provider is a thin wrapper over it. |
+
+---
+
 ## How to add an ADR
 
 1. Increment `ADR-NNN`.

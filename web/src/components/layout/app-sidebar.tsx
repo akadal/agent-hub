@@ -13,6 +13,7 @@ import {
 
 import { cn } from '@/lib/utils'
 import { fetchHealth } from '@/lib/api'
+import { ThemeToggle } from '@/components/theme-toggle'
 import { useAuth } from '@/lib/auth'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Separator } from '@/components/ui/separator'
@@ -91,10 +92,13 @@ export function AppSidebar({ onNavigate }: { onNavigate?: () => void }) {
         </nav>
       </ScrollArea>
       <Separator className="bg-sidebar-border" />
-      <div className="flex flex-col gap-0.5 p-4 text-xs text-muted-foreground">
-        <span>Machine → sessions · SSH</span>
-        {/* Which build is answering — the first thing a bug report needs. */}
-        {serverVersion ? <span>v{serverVersion}</span> : null}
+      <div className="flex flex-col gap-3 p-4">
+        <ThemeToggle className="w-full" />
+        <div className="flex flex-col gap-0.5 text-xs text-muted-foreground">
+          <span>Machine → sessions · SSH</span>
+          {/* Which build is answering — the first thing a bug report needs. */}
+          {serverVersion ? <span>v{serverVersion}</span> : null}
+        </div>
       </div>
     </div>
   )

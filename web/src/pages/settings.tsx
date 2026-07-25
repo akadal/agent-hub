@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
 
+import { ThemeToggle } from '@/components/theme-toggle'
 import { Button } from '@/components/ui/button'
 import {
   changeOwnPassword,
@@ -94,6 +95,17 @@ export function SettingsPage() {
           firewall — the app records the chosen default for operators and audit.
         </p>
       </div>
+
+      <section className="flex flex-col gap-3 rounded-lg border border-border bg-card p-4">
+        <div>
+          <h2 className="text-sm font-semibold">Appearance</h2>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Applies to this browser only — it is a display preference, not an
+            account setting. “System” follows your OS and switches with it.
+          </p>
+        </div>
+        <ThemeToggle showLabels className="w-full max-w-sm" />
+      </section>
 
       <form
         onSubmit={(e) => void onChangePassword(e)}

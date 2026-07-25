@@ -7,7 +7,29 @@
       name="viewport"
       content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content"
     />
+    <meta name="theme-color" content="#ffffff" />
     <title>Agent Hub</title>
+    <script>
+      // Paint the stored theme before the bundle runs. Without this a dark-theme
+      // user gets a full-page white flash on every load and every hard refresh.
+      // Keep the key in sync with src/lib/theme-pref.ts.
+      ;(function () {
+        try {
+          var pref = localStorage.getItem('agent-hub.theme')
+          if (pref !== 'light' && pref !== 'dark') pref = 'system'
+          var dark =
+            pref === 'dark' ||
+            (pref === 'system' &&
+              window.matchMedia('(prefers-color-scheme: dark)').matches)
+          document.documentElement.classList.toggle('dark', dark)
+          document.documentElement.style.colorScheme = dark ? 'dark' : 'light'
+          var meta = document.querySelector('meta[name="theme-color"]')
+          if (meta) meta.setAttribute('content', dark ? '#0a0a0a' : '#ffffff')
+        } catch (e) {
+          /* private mode / no matchMedia — React applies the theme on mount */
+        }
+      })()
+    </script>
   </head>
   <body>
     <div id="root"></div>
